@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
 
-import { createEditableMessageStream, splitMessageText } from '../shared/editable-message-stream.mjs';
+import { createEditableMessageStream } from '../shared/editable-message-stream.mjs';
 import { createTextDeliveryBlock } from '../shared/semantic/delivery.mjs';
 import { t } from '../shared/i18n.mjs';
 import { captureContextEnhancement } from '../shared/context-enhancement.mjs';
@@ -496,15 +496,18 @@ export function formatThinkingLine(text) {
 /**
  * Split a final answer for Telegram delivery. Paragraphs (blank-line
  * separated) accumulate up to `targetLimit`; an individual paragraph above
- * `hardLimit` is hard-split. Every chunk stays within `hardLimit`.
+ * `hardLimit` is split with the codepoint-safe Telegram regular-text
+ * splitter (whitespace preserved, surrogate pairs never cut, preferred cut
+ * at a line or space boundary). Every chunk stays within `hardLimit`.
  */
 export function splitAnswerIntoMessages(text, targetLimit = 1_600, hardLimit = 4_000) {
   const trimmed = (typeof text === 'string' ? text : '').trim();
   if (!trimmed) return [];
+  // Keep each paragraph's own whitespace (indented code after a blank line is
+  // content); only whitespace-only paragraphs carry nothing and are dropped.
   const paragraphs = trimmed.split(/\n{2,}/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .flatMap((part) => (part.length > hardLimit ? splitMessageText(part, hardLimit) : [part]));
+    .filter((part) => part.trim())
+    .flatMap((part) => (part.length > hardLimit ? splitTelegramRegularText(part, hardLimit) : [part]));
   const messages = [];
   let current = '';
   for (const paragraph of paragraphs) {
@@ -951,21 +954,61 @@ export class TelegramBotClient {
       async finish(answer) {
         if (closed) throw new Error('Message stream is already closed');
         closed = true;
+        const format = answer && typeof answer === 'object' && answer.format === 'markdown'
+          ? 'markdown'
+          : 'plain';
         const text = answer && typeof answer === 'object' && typeof answer.text === 'string'
           ? answer.text
           : typeof answer === 'string' ? answer : '';
         const trimmed = text.trim();
-        const chunks = trimmed ? splitAnswerIntoMessages(trimmed) : [];
-        try {
-          for (const chunk of chunks.length > 0 ? chunks : [t('处理完成。')]) {
-            await sendLine(chunk);
+        const chunks = trimmed ? splitAnswerIntoMessages(trimmed) : [t('处理完成。')];
+        // The final answer keeps the channel's normal delivery path, so a
+        // markdown answer renders rich (bold, code fences) exactly like
+        // non-trace mode; trace lines above stay plain permanent messages.
+        const remember = (ids) => {
+          for (const id of ids ?? []) {
+            if (!providerMessageIds.includes(id)) providerMessageIds.push(id);
           }
-          return { presentation: 'telegram-thinking', providerMessageIds: [...providerMessageIds] };
-        } catch (error) {
-          if (!trimmed) throw error;
-          warnFailure('final answer', error);
-          return client.sendText(target, trimmed);
+        };
+        for (let index = 0; index < chunks.length; index += 1) {
+          let result;
+          try {
+            result = await client.#sendRich(target, createTextDeliveryBlock(chunks[index], format));
+          } catch (error) {
+            const failure = telegramFailure(error);
+            warnFailure('final answer', error);
+            if (failure.outcome === 'unknown') {
+              return deliveryResult('telegram-thinking', providerMessageIds, 'unknown', failure.reason);
+            }
+          }
+          if (result?.deliveryOutcome === 'sent') {
+            remember(result.providerMessageIds);
+            continue;
+          }
+          if (result?.deliveryOutcome === 'unknown') {
+            // 结果未知（超时等）：可能已送达，重发会造成重复，保留 unknown 状态。
+            remember(result.providerMessageIds);
+            return deliveryResult('telegram-thinking', providerMessageIds, 'unknown', result.reason);
+          }
+          // 明确失败：该分片确认未送达。纯文本分片再走一次 plain 重发
+          // （markdown 分片的 plain 回退已在 #sendRich 内尝试过），只重发
+          // 尚未发送的尾部内容，已成功的分片不重复。
+          remember(result?.providerMessageIds);
+          if (format === 'markdown') {
+            return deliveryResult('telegram-thinking', providerMessageIds, 'failed', result.reason);
+          }
+          warnFailure('final answer chunk', new Error('chunk definitively rejected'));
+          try {
+            const fallback = await client.sendText(target, chunks.slice(index).join('\n\n'));
+            remember(fallback.providerMessageIds);
+            return deliveryResult('telegram-thinking', providerMessageIds);
+          } catch (error) {
+            const failure = telegramFailure(error);
+            warnFailure('final answer fallback', error);
+            return deliveryResult('telegram-thinking', providerMessageIds, failure.outcome, failure.reason);
+          }
         }
+        return deliveryResult('telegram-thinking', providerMessageIds);
       },
       cancel() {
         closed = true;

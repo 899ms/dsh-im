@@ -117,6 +117,32 @@ test('A8: splitAnswerIntoMessages hard-splits an oversized single paragraph', ()
   assert.equal(messages.join(''), 'a'.repeat(12_000));
 });
 
+test('A8b: splitAnswerIntoMessages preserves indentation after a blank line', () => {
+  // 空行后的代码缩进是内容：旧实现按段 trim 会把 `    return x` 变成 `return x`。
+  const answer = 'def f():\n    x = 1\n\n    return x';
+  assert.deepEqual(splitAnswerIntoMessages(answer), [answer]);
+  // 超硬限段落跨片时，空行后的缩进段仍完整保留。
+  const body = ('x'.repeat(50) + '\n').repeat(90); // 4590 字符 > 4000
+  const longAnswer = `${body.trimEnd()}\n\n    return x`;
+  const messages = splitAnswerIntoMessages(longAnswer);
+  assert.ok(messages.every((message) => message.length <= 4_000));
+  assert.ok(
+    messages.some((message) => message.includes('    return x')),
+    'the indented line keeps its four leading spaces',
+  );
+});
+
+test('A8c: splitAnswerIntoMessages never cuts a surrogate pair at the boundary', () => {
+  // 评审复现：3999 个 'a' + '😀'（limit 4000）时旧实现把 Emoji 拆成两个孤立代理项。
+  const answer = 'a'.repeat(3999) + '😀' + 'b'.repeat(50);
+  const messages = splitAnswerIntoMessages(answer);
+  assert.ok(messages.every((message) => message.length <= 4_000));
+  assert.equal(messages.join(''), answer);
+  // 强断言：切点落在 Emoji 之前，代理项不跨片。
+  assert.equal(messages[0], 'a'.repeat(3999));
+  assert.ok(messages[1].startsWith('😀'));
+});
+
 // --- A9/A10: openThinkingStream over a stub api ---------------------------
 
 test('A9: thinking stream sends each line as a separate plain message', async () => {
@@ -182,13 +208,73 @@ test('A11: failing trace lines are best-effort; a failing finish falls back to s
   assert.equal(sent[0].text, 'final answer');
   assert.equal(sent[1].text, 'final answer');
   assert.deepEqual(result.providerMessageIds, ['4002']);
+  assert.equal(result.deliveryOutcome, 'sent', 'the plain retry confirms delivery');
+});
+
+test('A11b: an unknown final-answer failure is not re-sent and keeps the unknown outcome', async () => {
+  const sent = [];
+  const api = {
+    sendMessage: async (params) => {
+      sent.push(params);
+      const error = new Error('upstream timed out');
+      error.code = 'telegram-timeout';
+      throw error;
+    },
+  };
+  const client = new TelegramBotClient({ api, signal: undefined, logger: quietLogger });
+  const stream = client.openThinkingStream({ chatId: 42, replyToMessageId: 9 });
+  const result = await stream.finish('final answer');
+  assert.equal(sent.length, 1, 'unknown outcome: the message may have landed, so no re-send');
+  assert.equal(result.deliveryOutcome, 'unknown');
+  assert.equal(result.reason, 'telegram-timeout');
+  assert.equal(result.presentation, 'telegram-thinking');
+});
+
+test('A12: a markdown final answer is delivered through the rich path', async () => {
+  const plain = [];
+  const rich = [];
+  const api = {
+    sendMessage: async (params) => { plain.push(params); return { message_id: 5000 + plain.length }; },
+    sendRichMessage: async (params) => { rich.push(params); return { message_id: 6000 + rich.length }; },
+  };
+  const client = new TelegramBotClient({ api, signal: undefined, logger: quietLogger });
+  const stream = client.openThinkingStream({ chatId: 42, replyToMessageId: 7 });
+  await stream.sendThinking('Let me check.');
+  const result = await stream.finish({ text: '**bold** answer', format: 'markdown' });
+  assert.equal(rich.length, 1, 'markdown goes through sendRichMessage');
+  assert.equal(rich[0].richMessage.markdown, '**bold** answer');
+  // 过程消息仍是纯文本；最终答案没有走 plain 回退（只有那条 trace 行进了 plain）。
+  assert.equal(plain.length, 1);
+  assert.equal(plain[0].text, '💭 Let me check.');
+  assert.equal(result.deliveryOutcome, 'sent');
+  assert.deepEqual(stream.providerMessageIds, ['5001', '6001']);
+});
+
+test('A12b: a markdown final answer falls back to plain when the rich send is rejected', async () => {
+  const plain = [];
+  const rich = [];
+  const api = {
+    sendMessage: async (params) => { plain.push(params); return { message_id: 7000 + plain.length }; },
+    sendRichMessage: async (params) => {
+      rich.push(params);
+      throw new Error('rich rejected');
+    },
+  };
+  const client = new TelegramBotClient({ api, signal: undefined, logger: quietLogger });
+  const stream = client.openThinkingStream({ chatId: 42 });
+  const result = await stream.finish({ text: '**bold** answer', format: 'markdown' });
+  assert.equal(rich.length, 1);
+  assert.equal(plain.length, 1, 'definite rich failure falls back to one plain send');
+  assert.equal(plain[0].text, '**bold** answer');
+  assert.equal(result.deliveryOutcome, 'sent');
+  assert.deepEqual(result.providerMessageIds, ['7001']);
 });
 
 // --- harness client: reasoning update emission -----------------------------
 
 test('B0: the reply tracker emits a reasoning update alongside assistant-message', () => {
   const updates = [];
-  const tracker = new HarnessReplyTracker({ promptRpcId: 'tt-prompt', afterSeq: 2 });
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'tt-prompt', afterSeq: 2, reasoning: true });
   for (const entry of [
     { event: { seq: 3, type: 'turn/start', data: { turn: 9 } } },
     { event: { seq: 4, type: 'user/message', data: { turn: 9, source: { rpcId: 'tt-prompt' } } } },
@@ -213,6 +299,39 @@ test('B0: the reply tracker emits a reasoning update alongside assistant-message
   assert.deepEqual(updates[1], { type: 'reasoning', step: 0, text: 'Let me check the files first.' });
   assert.equal(reasoningFromHarnessContent([{ type: 'text', text: 'x' }]), '');
   assert.equal(reasoningFromHarnessContent(null), '');
+});
+
+test('B0b: the default tracker does not emit reasoning updates for non-subscribed channels', () => {
+  const updates = [];
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'tt-default', afterSeq: 2 });
+  for (const entry of [
+    { event: { seq: 3, type: 'turn/start', data: { turn: 9 } } },
+    { event: { seq: 4, type: 'user/message', data: { turn: 9, source: { rpcId: 'tt-default' } } } },
+    { event: {
+      seq: 5,
+      type: 'assistant/message',
+      data: {
+        turn: 9,
+        step: 0,
+        message: {
+          content: [
+            { type: 'reasoning', text: 'Let me check the files first.' },
+            { type: 'text', text: 'I will check the files.' },
+          ],
+        },
+      },
+    } },
+  ]) {
+    tracker.consumeAll([entry]).forEach((update) => updates.push(update));
+  }
+  // 默认（非留痕订阅方）只见 canonical 定稿更新与既有 text 帧，reasoning 不进入
+  // 进度流，钉钉/企微等渠道的 update.text 进度处理因此不会展示思考内容
+  // （assistant-message 由各渠道现有处理显式忽略）。
+  assert.deepEqual(updates, [
+    { type: 'assistant-message', step: 0, text: 'I will check the files.' },
+    { type: 'text', text: 'I will check the files.' },
+  ]);
+  assert.ok(!updates.some((update) => update.type === 'reasoning'));
 });
 
 // --- B: bridge thinking mode ----------------------------------------------

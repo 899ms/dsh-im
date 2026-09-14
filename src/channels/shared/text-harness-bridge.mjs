@@ -760,8 +760,11 @@ export class TextHarnessBridge {
           signal: this.#signal,
           control: { owner: this, key: conversationKey },
           // Thinking mode needs every update (reasoning + tool calls) in
-          // order; latest mode filters as before.
+          // order; latest mode filters as before. Only thinking mode subscribes
+          // to reasoning updates, so default-mode consumers on other channels
+          // never see them (their progress handlers would render update.text).
           progressMode: thinkingMode ? 'all' : undefined,
+          reasoning: thinkingMode,
           onUpdate: stream ? async (update) => {
             if (thinkingMode) {
               // Only the 💭 and 🔧 lines are surfaced; status/text updates
