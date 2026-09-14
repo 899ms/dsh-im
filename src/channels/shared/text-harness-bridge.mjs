@@ -597,6 +597,10 @@ export class TextHarnessBridge {
     const batchSubmission = message.batchSubmission;
     let stream = null;
     let semanticStream = false;
+    // Thinking streams accept the same delivery-block contract as semantic
+    // streams: finish() must receive { text, format } so a markdown answer
+    // renders rich instead of falling back to plain text.
+    let thinkingStream = false;
     // A keepalive heartbeat keeps short-lived carriers (e.g. Telegram's
     // private-chat Rich Draft) visible during long silent stretches such as a
     // running tool call. Declared outside the try so every exit path (including
@@ -670,6 +674,7 @@ export class TextHarnessBridge {
       if (this.#thinkingTraces && typeof this.#bot.openThinkingStream === 'function') {
         try {
           stream = await this.#bot.openThinkingStream(target);
+          thinkingStream = true;
         } catch (error) {
           stream = null;
           this.#logger.warn?.(
@@ -815,7 +820,7 @@ export class TextHarnessBridge {
       let textReceipt = null;
       if (stream) {
         try {
-          const result = await stream.finish(semanticStream
+          const result = await stream.finish(semanticStream || thinkingStream
             ? createTextDeliveryBlock(visibleAnswer, answerFormat)
             : visibleAnswer);
           streamFinished = true;
