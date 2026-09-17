@@ -999,6 +999,128 @@ test('tracker exposes per-step assistant messages and tool arguments', () => {
   ]);
 });
 
+test('tracker live mode exposes native-process reasoning, tool results, and boundaries', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-live', afterSeq: 0 });
+  const updates = tracker.consumeAll([
+    { type: 'turn/start', seq: 1, data: { turn: 3 } },
+    { type: 'user/message', seq: 2, data: { turn: 3, source: { rpcId: 'rpc-live' } } },
+    { type: 'assistant/chunk', seq: 3, data: {
+      turn: 3,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '分析中' },
+    } },
+    { type: 'tool/call', seq: 4, data: {
+      turn: 3,
+      step: 0,
+      callId: 'call-live',
+      name: 'read_file',
+      arguments: '{"path":"a.md"}',
+    } },
+    { type: 'tool/result', seq: 5, data: {
+      turn: 3,
+      step: 0,
+      message: {
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-live',
+          content: [{ type: 'text', text: '文件内容' }],
+        }],
+      },
+    } },
+    { type: 'turn/end', seq: 6, data: { turn: 3, reason: { kind: 'completed' } } },
+  ], { live: true });
+
+  assert.deepEqual(updates, [
+    { type: 'turn-start', turn: 3 },
+    { type: 'reasoning', turn: 3, text: '分析中' },
+    {
+      type: 'tool',
+      name: 'read_file',
+      arguments: '{"path":"a.md"}',
+      callId: 'call-live',
+      turn: 3,
+    },
+    {
+      type: 'tool-result',
+      turn: 3,
+      callId: 'call-live',
+      toolName: 'read_file',
+      text: '文件内容',
+    },
+    { type: 'turn-end', turn: 3, reason: { kind: 'completed' } },
+  ]);
+});
+
+test('tracker accepts a late fractional reasoning chunk after a newer durable event', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-race', afterSeq: 0 });
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 1, data: { turn: 3 } },
+    { type: 'user/message', seq: 2, data: {
+      turn: 3,
+      source: { rpcId: 'rpc-race' },
+    } },
+    { type: 'assistant/message', seq: 4, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '阶段结果' }] },
+    } },
+  ], { live: true });
+
+  const updates = tracker.consumeAll([{
+    type: 'assistant/chunk',
+    seq: 3.5,
+    data: {
+      turn: 3,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '迟到推理' },
+    },
+  }], { live: true });
+
+  assert.deepEqual(updates, [{
+    type: 'reasoning',
+    turn: 3,
+    text: '迟到推理',
+  }]);
+  assert.deepEqual(tracker.consumeAll([{
+    type: 'assistant/chunk',
+    seq: 3.5,
+    data: {
+      turn: 3,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '迟到推理' },
+    },
+  }], { live: true }), []);
+  assert.equal(tracker.lastSeq, 4);
+});
+
+test('tracker rejects a late fractional text chunk after its canonical message', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-text-race', afterSeq: 0 });
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 1, data: { turn: 3 } },
+    { type: 'user/message', seq: 2, data: {
+      turn: 3,
+      source: { rpcId: 'rpc-text-race' },
+    } },
+    { type: 'assistant/message', seq: 4, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '最终答案' }] },
+    } },
+  ], { live: true });
+
+  assert.deepEqual(tracker.consumeAll([{
+    type: 'assistant/chunk',
+    seq: 3.5,
+    data: {
+      turn: 3,
+      step: 0,
+      chunk: { type: 'text-delta', index: 0, text: '迟到片段' },
+    },
+  }], { live: true }), []);
+  assert.equal(tracker.answer, '最终答案');
+  assert.equal(tracker.lastSeq, 4);
+});
+
 test('a canonical message equal to committed text dedupes the trailing text update', () => {
   const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-dedupe', afterSeq: 0 });
   tracker.consumeAll([

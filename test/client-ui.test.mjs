@@ -598,7 +598,7 @@ test('Feishu keeps its heading controls on one row without a plus icon', async (
   assert.doesNotMatch(styles, /\.bxf-headingTools \.bxf-button \{ margin-left: auto; \}/);
 });
 
-test('Feishu bot settings render one step-push select with three presentations', async (t) => {
+test('Feishu bot settings render one step-push select with four presentations', async (t) => {
   const previousWindow = globalThis.window;
   let nextTimer = 0;
   const frames = new Map();
@@ -672,7 +672,7 @@ test('Feishu bot settings render one step-push select with three presentations',
     .some((heading) => nodeText(heading) === '任务过程展示'));
   assert.deepEqual(
     stepPushSelect().findAllByType('option').map((option) => option.props.value),
-    ['off', 'streaming_card', 'post'],
+    ['off', 'live_cot', 'streaming_card', 'post'],
   );
   const helpNodes = renderer.root.findAll(
     (node) => node.props?.className === 'dim-feishuGroupHelp',
@@ -701,13 +701,26 @@ test('Feishu bot settings render one step-push select with three presentations',
   assert.ok(flagIndex < modeIndex, 'the flag must be saved before the mode');
   assert.equal(stepPushSelect().props.value, 'streaming_card');
 
-  // streaming_card -> post: only the mode endpoint is called.
+  // streaming_card -> live_cot: only the mode endpoint is called.
   const afterEnable = calls.length;
+  await act(async () => {
+    stepPushSelect().props.onChange({ target: { value: 'live_cot' } });
+    await flushTasks();
+  });
+  const liveCalls = calls.slice(afterEnable);
+  assert.equal(liveCalls.filter(({ endpoint, payload }) => (
+    endpoint === FEISHU_ENDPOINTS.setStepPushMode && payload.stepPushMode === 'live_cot'
+  )).length, 1);
+  assert.equal(liveCalls.filter(({ endpoint }) => endpoint === FEISHU_ENDPOINTS.setStepPush).length, 0);
+  assert.equal(stepPushSelect().props.value, 'live_cot');
+
+  // live_cot -> post: only the mode endpoint is called.
+  const afterLive = calls.length;
   await act(async () => {
     stepPushSelect().props.onChange({ target: { value: 'post' } });
     await flushTasks();
   });
-  const postCalls = calls.slice(afterEnable);
+  const postCalls = calls.slice(afterLive);
   assert.equal(postCalls.filter(({ endpoint }) => endpoint === FEISHU_ENDPOINTS.setStepPushMode).length, 1);
   assert.equal(postCalls.filter(({ endpoint }) => endpoint === FEISHU_ENDPOINTS.setStepPush).length, 0);
   assert.equal(stepPushSelect().props.value, 'post');

@@ -54,7 +54,7 @@ Connect IM bots to DeepSeek Harness by scanning a QR code, using an App Manifest
 
 | Channel | Setup | Messaging and replies |
 | --- | --- | --- |
-| Feishu | Create a bot by QR code, or bind one with App ID + App Secret | Persistent connection for incoming messages; streaming cards show thinking, tool progress, and replies |
+| Feishu | Create a bot by QR code, or bind one with App ID + App Secret | Persistent connection for incoming messages; choose a native live process, one live process card, or step-by-step messages |
 | WeChat | Scan a QR code to bind a WeChat bot | Tencent iLink long polling; shows a typing indicator while Harness works, then sends the final reply in 1,800-character chunks |
 | DingTalk | Create a bot by QR code, or bind one with Client ID + Client Secret | DingTalk Stream connection; streaming replies through AI Cards |
 | WeCom | Create an intelligent bot by QR code, or bind one with Bot ID + Secret | Official WebSocket connection; native thinking state, tool progress, and streaming replies |
@@ -146,6 +146,7 @@ Use the proxy URL required by your network and restart the Host after changing i
 | Reasoning effort | Explicitly choose an effort supported by the selected model, or follow the model default. Levels, descriptions, and defaults come from DSH. Switching models restores the new model's default effort. Each bot saves its own choice, which applies only to later new Sessions. |
 | Agent Preset | Each bot can choose an Agent Preset on its settings card. When none is chosen, new Sessions follow the Host's `agent-presets.default`. A channel-level `config.agentPreset` is only the default for later new bots on that channel. Changing the preset never modifies or clears existing Sessions; if the current chat already has a Session, send `/new` and then a regular message to create one with the new selection. |
 | Context enhancement | Open settings from a bot card to enable groups and DMs independently. Both switches default to off, including for existing bots after an upgrade. |
+| Feishu task progress display | Each Feishu bot can hide progress or use Live process, Live process card, or step-by-step messages. Live process uses Feishu's native thinking-process surface for reasoning, tool calls, and results, then sends the final answer separately. It requires Feishu desktop 7.70, mobile 7.74, or newer. |
 | Session channel identity | Sessions from the local Host's IM channels and AI Office are marked with their source. The Web Session list and search results display channel logos in place of prefixes such as “WeChat ·”, preserving DSH's automatic title generation and updates. Existing Sessions receive the prefix when next loaded. |
 
 Channel prefixes are appended after DSH produces a title, preserving its complete text and automatic/manual source without pinning automatic titles or making additional model calls. Regeneration, refresh, and restarts do not stack prefixes; actual manual renames retain DSH's normal pinning behavior. This feature uses the current Host's Session events; an explicit remote `harnessBaseUrl` requires the plugin on the destination Host.

@@ -8961,6 +8961,75 @@ function stepPushHarness(askBody) {
   };
 }
 
+test('step push live_cot mode uses Feishu native process and sends the final answer separately', async () => {
+  const fixture = stateFixture();
+  const sent = [];
+  const writes = [];
+  const creates = [];
+  const channel = {
+    ...stepPushChannel(),
+    createCot: async (chatId, options) => {
+      creates.push({ chatId, options });
+      return { cotId: 'cot-live', messageId: 'om-cot-live' };
+    },
+    writeCotEvents: async (_handle, events) => writes.push(...events),
+  };
+  const bridge = new FeishuHarnessBridge({
+    client: stepPushTextClient((text) => sent.push(text)),
+    channel,
+    harness: stepPushHarness(async (_sessionId, _text, options) => {
+      assert.equal(options.progressMode, 'live');
+      await options.onUpdate({ type: 'turn-start', turn: 4 });
+      await options.onUpdate({ type: 'reasoning', turn: 4, text: '分析请求' });
+      await options.onUpdate({ type: 'assistant-message', turn: 4, step: 0, text: '先读取文件' });
+      await options.onUpdate({
+        type: 'tool',
+        turn: 4,
+        name: 'read_file',
+        callId: 'call-live',
+        arguments: '{"path":"a.md"}',
+      });
+      await options.onUpdate({
+        type: 'tool-result',
+        turn: 4,
+        callId: 'call-live',
+        text: '文件内容',
+      });
+      await options.onUpdate({ type: 'assistant-message', turn: 4, step: 1, text: '最终答案' });
+      await options.onUpdate({ type: 'turn-end', turn: 4, reason: { kind: 'completed' } });
+      return '最终答案';
+    }),
+    state: fixture.state,
+    status: bridgeStatus(),
+    allowedSenderOpenIds: new Set(['ou_user']),
+    stepPush: true,
+    stepPushMode: 'live_cot',
+  });
+
+  await bridge.accept(event('om_live_cot', '执行任务'));
+  await bridge.waitForIdle();
+
+  assert.deepEqual(creates, [{
+    chatId: 'oc_chat',
+    options: { replyTo: 'om_live_cot', hidden: false },
+  }]);
+  assert.deepEqual(writes.map(({ event_type }) => event_type), [
+    'RUN_STARTED',
+    'REASONING_MESSAGE_START',
+    'REASONING_MESSAGE_CONTENT',
+    'TEXT_MESSAGE_START',
+    'TEXT_MESSAGE_CONTENT',
+    'TEXT_MESSAGE_END',
+    'REASONING_MESSAGE_END',
+    'TOOL_CALL_START',
+    'TOOL_CALL_ARGS',
+    'TOOL_CALL_END',
+    'TOOL_CALL_RESULT',
+    'RUN_FINISHED',
+  ]);
+  assert.deepEqual(sent, ['最终答案']);
+});
+
 test('step push: tools and assistant notes push as discrete messages, final answer only in card', async () => {
   const fixture = stateFixture();
   const sent = [];

@@ -411,6 +411,29 @@ function toolResultErrorText(error) {
   return null;
 }
 
+/** Join the visible text carried by a Harness tool result. */
+function toolResultText(data) {
+  const blocks = Array.isArray(data?.message?.content) ? data.message.content : [];
+  const nested = blocks.flatMap((block) => (
+    Array.isArray(block?.content) ? block.content : [block]
+  ));
+  const text = nested
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('');
+  return text || nonEmptyText(data?.text) || toolResultErrorText(data?.error) || '';
+}
+
+function toolResultCallId(data) {
+  const blocks = Array.isArray(data?.message?.content) ? data.message.content : [];
+  return blocks
+    .map((block) => nonEmptyText(block?.toolCallId))
+    .find(Boolean)
+    ?? nonEmptyText(data?.message?.source?.callId)
+    ?? nonEmptyText(data?.callId)
+    ?? nonEmptyText(data?.subCallId);
+}
+
 function consumeInteractionOwnership(ownership, entries) {
   const ordered = [...entries]
     .map((entry) => entry?.event ?? entry)
@@ -501,6 +524,7 @@ export class HarnessReplyTracker {
   #reason = null;
   #toolNames = new Map();
   #lastToolName = null;
+  #transientSeqs = new Set();
 
   constructor({ promptRpcId, afterSeq = -1 }) {
     this.#promptRpcId = promptRpcId;
@@ -538,7 +562,7 @@ export class HarnessReplyTracker {
     pushUpdate({ type: 'text', text });
   }
 
-  consumeAll(entries) {
+  consumeAll(entries, { live = false } = {}) {
     const updates = [];
     // 同一批轮询内的 text 帧只保留最新累积，其余事件逐帧透出，
     // 让消费方能按顺序看到每个工具调用与结果。
@@ -559,13 +583,23 @@ export class HarnessReplyTracker {
 
     for (const event of ordered) {
       const seq = event.seq ?? -1;
-      if (seq <= this.#lastSeq) continue;
-      this.#lastSeq = seq;
+      const lateReasoningChunk = event.type === 'assistant/chunk'
+        && event.data?.chunk?.type === 'reasoning-delta'
+        && Number.isFinite(seq)
+        && !Number.isInteger(seq);
+      if (lateReasoningChunk) {
+        if (this.#transientSeqs.has(seq)) continue;
+        this.#transientSeqs.add(seq);
+      } else {
+        if (seq <= this.#lastSeq) continue;
+        this.#lastSeq = seq;
+      }
 
       if (event.type === 'turn/start') this.#openTurn = event.data?.turn ?? null;
 
       if (event.type === 'user/message' && event.data?.source?.rpcId === this.#promptRpcId) {
         this.#targetTurn = this.#openTurn;
+        if (live) pushUpdate({ type: 'turn-start', turn: this.#targetTurn });
         continue;
       }
       if (this.#targetTurn === null) continue;
@@ -575,9 +609,26 @@ export class HarnessReplyTracker {
         this.#finished = true;
         this.#reason = event.data?.reason ?? null;
         this.#openTurn = null;
+        if (live) {
+          pushUpdate({
+            type: 'turn-end',
+            turn: this.#targetTurn,
+            reason: this.#reason,
+          });
+        }
         continue;
       }
       if (event.data?.turn !== this.#targetTurn) continue;
+
+      if (live
+        && event.type === 'assistant/chunk'
+        && event.data?.chunk?.type === 'reasoning-delta') {
+        const text = event.data.chunk.text;
+        if (typeof text === 'string' && text) {
+          pushUpdate({ type: 'reasoning', turn: this.#targetTurn, text });
+        }
+        continue;
+      }
 
       if (event.type === 'assistant/chunk' && event.data?.chunk?.type === 'text-delta') {
         const step = event.data?.step ?? 0;
@@ -593,7 +644,14 @@ export class HarnessReplyTracker {
         this.#assistantText.setCanonical(step, text);
         // canonical 定稿且非空时按 step 透出，供分步推送消费方使用；
         // 先于 commitText 透出，保持 text 更新作为批次末尾的既有语义。
-        if (text) pushUpdate({ type: 'assistant-message', step, text });
+        if (text) {
+          pushUpdate({
+            type: 'assistant-message',
+            step,
+            text,
+            ...(live ? { turn: this.#targetTurn } : {}),
+          });
+        }
         this.#commitText(this.#assistantText.text, pushUpdate);
         continue;
       }
@@ -616,20 +674,38 @@ export class HarnessReplyTracker {
             }
           }
         }
-        pushUpdate({ type: 'tool', name, ...(argsText ? { arguments: argsText } : {}), ...(callId ? { callId } : {}) });
+        pushUpdate({
+          type: 'tool',
+          name,
+          ...(argsText ? { arguments: argsText } : {}),
+          ...(callId ? { callId } : {}),
+          ...(live ? { turn: this.#targetTurn } : {}),
+        });
       } else if (event.type === 'tool/result') {
-        const callId = nonEmptyText(event.data?.message?.source?.callId)
-          ?? nonEmptyText(event.data?.callId)
-          ?? nonEmptyText(event.data?.subCallId);
+        const callId = toolResultCallId(event.data);
         const toolName = (callId ? this.#toolNames.get(callId) : null)
           ?? this.#lastToolName;
         const error = toolResultErrorText(event.data?.error);
-        pushUpdate({
-          type: 'status',
-          text: t('正在整理结果…'),
-          ...(toolName ? { toolName } : {}),
-          ...(error ? { error } : {}),
-        });
+        if (live) {
+          const providerErrorCode = event.data?.error?.code;
+          pushUpdate({
+            type: 'tool-result',
+            turn: this.#targetTurn,
+            ...(callId ? { callId } : {}),
+            ...(toolName ? { toolName } : {}),
+            text: toolResultText(event.data),
+            ...(providerErrorCode !== undefined && providerErrorCode !== null
+              ? { errorCode: String(providerErrorCode) }
+              : {}),
+          });
+        } else {
+          pushUpdate({
+            type: 'status',
+            text: t('正在整理结果…'),
+            ...(toolName ? { toolName } : {}),
+            ...(error ? { error } : {}),
+          });
+        }
       }
     }
     return updates;
@@ -1096,6 +1172,7 @@ export class HarnessClient {
     signal,
     onInteraction,
     onResolved,
+    onSessionEvent,
     onOpen,
     ownership,
   } = {}) {
@@ -1109,6 +1186,9 @@ export class HarnessClient {
     if (onResolved !== undefined && typeof onResolved !== 'function') {
       throw new TypeError('onResolved must be a function');
     }
+    if (onSessionEvent !== undefined && typeof onSessionEvent !== 'function') {
+      throw new TypeError('onSessionEvent must be a function');
+    }
     if (onOpen !== undefined && typeof onOpen !== 'function') {
       throw new TypeError('onOpen must be a function');
     }
@@ -1119,6 +1199,7 @@ export class HarnessClient {
           signal,
           onInteraction,
           onResolved,
+          onSessionEvent,
           onOpen,
           ownership,
         });
@@ -1395,7 +1476,9 @@ export class HarnessClient {
     const timeoutMs = options.timeoutMs ?? 600_000;
     const signal = options.signal;
     const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : null;
-    const progressMode = options.progressMode === 'all' ? 'all' : 'latest';
+    const progressMode = options.progressMode === 'live'
+      ? 'live'
+      : options.progressMode === 'all' ? 'all' : 'latest';
     const onArtifact = typeof options.onArtifact === 'function' ? options.onArtifact : null;
     const onInteraction = typeof options.onInteraction === 'function'
       ? options.onInteraction
@@ -1416,7 +1499,35 @@ export class HarnessClient {
     const promptRpcId = `${this.#rpcIdPrefix}-${randomUUID()}`;
     const releasePromptInputOrigin = registerImInputOrigin(this.#interactionRegistry, promptRpcId);
     const tracker = new HarnessReplyTracker({ promptRpcId, afterSeq: baselineSeq });
+    let lastProgressAt = Date.now();
+    let lastPollSeq = tracker.lastSeq;
+    let progressTail = Promise.resolve();
+    const consumeProgress = (entries) => {
+      const updates = tracker.consumeAll(entries, {
+        live: progressMode === 'live',
+      });
+      const seqAdvanced = tracker.lastSeq > lastPollSeq;
+      lastPollSeq = tracker.lastSeq;
+      if (seqAdvanced) lastProgressAt = Date.now();
+      if (!onUpdate) return progressTail;
+      const visibleUpdates = progressMode === 'all' || progressMode === 'live'
+        ? updates
+        : updates.filter((update) => update.type !== 'assistant-message').slice(-1);
+      for (const update of visibleUpdates) {
+        progressTail = progressTail
+          .then(() => onUpdate(update))
+          .catch((error) => {
+            console.warn(
+              '[dsh-im] ignored a progress update failure:',
+              this.#logPrefix,
+              error.message,
+            );
+          });
+      }
+      return progressTail;
+    };
     const interactionController = onInteraction || onInteractionResolved
+      || (progressMode === 'live' && onUpdate)
       ? new AbortController()
       : null;
     const interactionSignal = interactionController
@@ -1491,6 +1602,9 @@ export class HarnessClient {
           signal: interactionSignal,
           onInteraction,
           onResolved: onInteractionResolved,
+          onSessionEvent: progressMode === 'live'
+            ? (event) => { consumeProgress([event]); }
+            : undefined,
           onOpen: markOpen,
           ownership,
         });
@@ -1565,8 +1679,6 @@ export class HarnessClient {
         // confirm the Session is still running before renewing the wait.
         // Interaction ownership is intentionally not a liveness signal: it stays
         // active until turn/end and can therefore outlive a stalled turn.
-        let lastProgressAt = Date.now();
-        let lastPollSeq = tracker.lastSeq;
         while (true) {
           await sleep(300, signal);
           const history = await this.rpc(
@@ -1580,24 +1692,7 @@ export class HarnessClient {
             this.#consumeInteractionOwnerships(sessionId, history.events ?? []);
             if (!wasActive && ownership.active) ownership.reconnect?.();
           }
-          const updates = tracker.consumeAll(history.events ?? []);
-          const seqAdvanced = tracker.lastSeq > lastPollSeq;
-          lastPollSeq = tracker.lastSeq;
-          if (seqAdvanced) lastProgressAt = Date.now();
-          if (onUpdate) {
-            // latest 模式只投递一条最新进展；assistant-message 是分步推送专用更新，
-            // 且 canonical 去重后可能成为批次唯一变化，绝不能冒充进度投给全部渠道。
-            const visibleUpdates = progressMode === 'all'
-              ? updates
-              : updates.filter((update) => update.type !== 'assistant-message').slice(-1);
-            for (const update of visibleUpdates) {
-              try {
-                await onUpdate(update);
-              } catch (error) {
-                console.warn('[dsh-im] ignored a progress update failure:', this.#logPrefix, error.message);
-              }
-            }
-          }
+          await consumeProgress(history.events ?? []);
           if (tracker.finished) {
             turnFinished = true;
             if (!ownership?.stopRequested && !harnessTurnSucceeded(tracker.reason)) {
@@ -1670,6 +1765,7 @@ export class HarnessClient {
     signal,
     onInteraction,
     onResolved,
+    onSessionEvent,
     onOpen,
     ownership,
   }) {
@@ -1709,8 +1805,9 @@ export class HarnessClient {
     };
     const processEnvelope = (envelope) => {
       const payload = envelope.payload;
-      if (ownership && payload.type === 'session/event') {
-        this.#consumeInteractionOwnerships(sessionId, [payload.event]);
+      if (payload.type === 'session/event') {
+        if (ownership) this.#consumeInteractionOwnerships(sessionId, [payload.event]);
+        dispatch(onSessionEvent, payload.event);
         return;
       }
       if (payload.type === 'question/requested' || payload.type === 'approval/requested') {
