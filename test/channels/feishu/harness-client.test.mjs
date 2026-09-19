@@ -803,70 +803,126 @@ test('HarnessClient retains staged files when an accepted turn outcome is unknow
   assert.equal(cleanupCalls, 0, 'uncertain accepted turns may still be reading the staged path');
 });
 
-test('HarnessClient delivers an existing file-only Turn directly', async (t) => {
-  outboundArtifactRegistry.clear();
-  t.after(() => outboundArtifactRegistry.clear());
-  const workspace = await mkdtemp(join(tmpdir(), 'dsh-im-file-only-'));
-  t.after(() => rm(workspace, { recursive: true, force: true }));
-  const client = new HarnessClient({
-    baseUrl: 'http://127.0.0.1:3080',
-    workspace,
-  });
-  client.ensureRunning = async () => undefined;
-  const tool = createOutboundArtifactTool({ registry: outboundArtifactRegistry });
-  const delivered = [];
-  await writeFile(join(workspace, 'file-only.txt'), 'file only');
-  let promptRpcId;
-  let prompted = false;
-  const agent = {
-    session: {
-      header: { id: 'session-file-only', cwd: workspace },
-      events: [],
-    },
-  };
-  client.rpc = async (method, _payload, _timeoutMs, options) => {
-    if (method === 'session.history' && !prompted) return { events: [] };
-    if (method === 'session.prompt') {
-      prompted = true;
-      promptRpcId = options.rpcId;
-      agent.session.events = [
-        { type: 'turn/start', data: { turn: 2 } },
-        { type: 'user/message', data: { turn: 2, source: { rpcId: promptRpcId } } },
-      ];
-      const exec = {
-        name: OUTBOUND_ARTIFACT_TOOL,
-        callId: 'file-only-call',
-        token: Symbol('file-only-call'),
-        agent,
-        signal: new AbortController().signal,
-      };
-      await tool.definition.execute({ path: 'file-only.txt' }, exec);
-      tool.onResult(exec, { isError: false });
-      return {};
-    }
-    return {
-      events: [
-        { event: { type: 'turn/start', seq: 1, data: { turn: 2 } } },
-        {
-          event: {
-            type: 'user/message',
-            seq: 2,
-            data: { turn: 2, source: { rpcId: promptRpcId } },
-          },
-        },
-        { event: { type: 'turn/end', seq: 3, data: { turn: 2, reason: { kind: 'completed' } } } },
-      ],
+for (const failHandoff of [false, true]) {
+  test(`HarnessClient handles a file-only Turn with ${failHandoff ? 'failed' : 'successful'} handoff`, async (t) => {
+    outboundArtifactRegistry.clear();
+    t.after(() => outboundArtifactRegistry.clear());
+    const workspace = await mkdtemp(join(tmpdir(), 'dsh-im-file-only-'));
+    t.after(() => rm(workspace, { recursive: true, force: true }));
+    const client = new HarnessClient({
+      baseUrl: 'http://127.0.0.1:3080',
+      workspace,
+    });
+    client.ensureRunning = async () => undefined;
+    const tool = createOutboundArtifactTool({ registry: outboundArtifactRegistry });
+    const delivered = [];
+    await writeFile(join(workspace, 'file-only.txt'), 'file only');
+    let promptRpcId;
+    let prompted = false;
+    const agent = {
+      session: {
+        header: { id: 'session-file-only', cwd: workspace },
+        events: [],
+      },
     };
-  };
+    client.rpc = async (method, _payload, _timeoutMs, options) => {
+      if (method === 'session.history' && !prompted) return { events: [] };
+      if (method === 'session.prompt') {
+        prompted = true;
+        promptRpcId = options.rpcId;
+        agent.session.events = [
+          { type: 'turn/start', data: { turn: 2 } },
+          { type: 'user/message', data: { turn: 2, source: { rpcId: promptRpcId } } },
+        ];
+        const exec = {
+          name: OUTBOUND_ARTIFACT_TOOL,
+          callId: 'file-only-call',
+          token: Symbol('file-only-call'),
+          agent,
+          signal: new AbortController().signal,
+        };
+        await tool.definition.execute({ path: 'file-only.txt' }, exec);
+        tool.onResult(exec, { isError: false });
+        return {};
+      }
+      return {
+        events: [
+          { event: { type: 'turn/start', seq: 1, data: { turn: 2 } } },
+          {
+            event: {
+              type: 'user/message',
+              seq: 2,
+              data: { turn: 2, source: { rpcId: promptRpcId } },
+            },
+          },
+          { event: { type: 'turn/end', seq: 3, data: { turn: 2, reason: { kind: 'completed' } } } },
+        ],
+      };
+    };
 
-  const answer = await client.ask('session-file-only', 'create and return a file', {
-    onArtifact: async (artifact) => delivered.push(artifact),
+    const handoffError = Object.assign(new Error('artifact handoff failed'), { code: 'artifact-unavailable' });
+    const asking = client.ask('session-file-only', 'create and return a file', {
+      onArtifact: async (artifact) => {
+        if (failHandoff) throw handoffError;
+        delivered.push(artifact);
+      },
+    });
+    if (failHandoff) {
+      await assert.rejects(asking, (error) => error === handoffError);
+      assert.deepEqual(delivered, []);
+      assert.deepEqual(outboundArtifactRegistry.take('session-file-only', 2), []);
+      return;
+    }
+    const answer = await asking;
+    assert.equal(answer, '');
+    assert.equal(delivered.length, 1);
+    const file = await materializeOutboundArtifact(delivered[0]);
+    assert.equal(file.bytes.toString(), 'file only');
+    releaseOutboundArtifact(delivered[0]);
   });
-  assert.equal(answer, '');
-  assert.equal(delivered.length, 1);
-  const file = await materializeOutboundArtifact(delivered[0]);
-  assert.equal(file.bytes.toString(), 'file only');
-  releaseOutboundArtifact(delivered[0]);
+}
+
+test('HarnessClient completes tool-only turns and retains earlier visible text and tool errors', async () => {
+  for (const earlierText of ['', '开始执行。']) {
+    let promptRpcId;
+    const updates = [];
+    const client = new HarnessClient({ baseUrl: 'http://127.0.0.1:3080', workspace: '/tmp/workspace' });
+    client.ensureRunning = async () => undefined;
+    client.rpc = async (method, _payload, _timeoutMs, options) => {
+      if (method === 'session.prompt') {
+        promptRpcId = options.rpcId;
+        return {};
+      }
+      assert.equal(method, 'session.history');
+      if (!promptRpcId) return { events: [] };
+      return { events: [
+        { seq: 1, type: 'turn/start', data: { turn: 2 } },
+        { seq: 2, type: 'user/message', data: { turn: 2, source: { rpcId: promptRpcId } } },
+        { seq: 3, type: 'assistant/message', data: { turn: 2, step: 0, message: {
+          content: [{ type: 'text', text: earlierText }],
+        } } },
+        { seq: 4, type: 'assistant/message', data: { turn: 2, step: 1, message: {
+          content: [
+            { type: 'reasoning', text: 'internal reasoning' },
+            { type: 'tool-call', name: 'bash', callId: 'call-one', arguments: { command: 'example' } },
+          ],
+        } } },
+        { seq: 5, type: 'tool/call', data: { turn: 2, name: 'bash', callId: 'call-one' } },
+        { seq: 6, type: 'tool/result', data: { turn: 2, callId: 'call-one',
+          ...(earlierText ? { error: { message: 'tool failed' } } : {}),
+          message: { content: [{ type: 'text', text: 'tool output is not the answer' }] },
+        } },
+        { seq: 7, type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } },
+      ].map((event) => ({ event })) };
+    };
+    const answer = await client.ask('session-tool-only', 'work', {
+      progressMode: 'all', onUpdate: (update) => updates.push(update),
+    });
+    assert.equal(answer, earlierText || '本轮处理已结束，没有文本回复。');
+    assert.equal(updates.some((update) => update.type === 'tool'), true);
+    assert.equal(updates.some((update) => update.error === 'tool failed'), Boolean(earlierText));
+    assert.doesNotMatch(answer, /internal reasoning|tool output/);
+  }
 });
 
 test('HarnessReplyTracker correlates the prompt and emits only answer text', () => {
