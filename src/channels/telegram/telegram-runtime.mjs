@@ -493,37 +493,6 @@ export function formatThinkingLine(text) {
   return `💭 ${truncateCapped(firstParagraph, THINKING_LINE_LIMIT)}`;
 }
 
-/**
- * Split a final answer for Telegram delivery. Paragraphs (blank-line
- * separated) accumulate up to `targetLimit`; an individual paragraph above
- * `hardLimit` is split with the codepoint-safe Telegram regular-text
- * splitter (whitespace preserved, surrogate pairs never cut, preferred cut
- * at a line or space boundary). Every chunk stays within `hardLimit`.
- */
-export function splitAnswerIntoMessages(text, targetLimit = 1_600, hardLimit = 4_000) {
-  const trimmed = (typeof text === 'string' ? text : '').trim();
-  if (!trimmed) return [];
-  // Keep each paragraph's own whitespace (indented code after a blank line is
-  // content); only whitespace-only paragraphs carry nothing and are dropped.
-  const paragraphs = trimmed.split(/\n{2,}/)
-    .filter((part) => part.trim())
-    .flatMap((part) => (part.length > hardLimit ? splitTelegramRegularText(part, hardLimit) : [part]));
-  const messages = [];
-  let current = '';
-  for (const paragraph of paragraphs) {
-    if (!current) {
-      current = paragraph;
-    } else if (`${current}\n\n${paragraph}`.length <= targetLimit) {
-      current = `${current}\n\n${paragraph}`;
-    } else {
-      messages.push(current);
-      current = paragraph;
-    }
-  }
-  if (current) messages.push(current);
-  return messages;
-}
-
 export class TelegramBotClient {
   #api;
   #signal;
@@ -961,10 +930,19 @@ export class TelegramBotClient {
           ? answer.text
           : typeof answer === 'string' ? answer : '';
         const trimmed = text.trim();
-        const chunks = trimmed ? splitAnswerIntoMessages(trimmed) : [t('处理完成。')];
+        const answerText = trimmed || t('处理完成。');
         // The final answer keeps the channel's normal delivery path, so a
         // markdown answer renders rich (bold, code fences) exactly like
         // non-trace mode; trace lines above stay plain permanent messages.
+        // Markdown goes to #sendRich in one shot: splitTelegramRichMarkdown
+        // is fence-aware, so code blocks with inner blank lines stay intact
+        // and no blank line is rewritten. A blank-line pre-split would break
+        // both: unfinished fences fall back to plain, and rejoining with a
+        // fixed separator collapses \n{3,} inside multi-line strings. Plain
+        // answers use the whitespace-preserving regular-text splitter.
+        const chunks = format === 'markdown'
+          ? [answerText]
+          : splitTelegramRegularText(answerText);
         const remember = (ids) => {
           for (const id of ids ?? []) {
             if (!providerMessageIds.includes(id)) providerMessageIds.push(id);

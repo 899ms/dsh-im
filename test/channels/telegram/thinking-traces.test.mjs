@@ -18,7 +18,6 @@ import {
   TelegramBotClient,
   formatToolTrace,
   formatThinkingLine,
-  splitAnswerIntoMessages,
 } from '../../../src/channels/telegram/telegram-runtime.mjs';
 
 const TOKEN = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef123456';
@@ -99,48 +98,99 @@ test('A6: formatThinkingLine returns null for empty reasoning', () => {
   assert.equal(formatThinkingLine(undefined), null);
 });
 
-test('A7: splitAnswerIntoMessages groups paragraphs up to 1600 chars', () => {
-  const paragraphs = ['p'.repeat(500), 'q'.repeat(500), 'r'.repeat(500), 's'.repeat(500)];
-  const messages = splitAnswerIntoMessages(paragraphs.join('\n\n'));
-  assert.equal(messages.length, 2);
-  for (const message of messages) assert.ok(message.length <= 4_000);
-  assert.ok(messages[0].startsWith('p'.repeat(500)), 'paragraphs stay in order');
-  assert.ok(messages[0].includes('q'.repeat(500)));
-  assert.equal(messages[1].trim(), 's'.repeat(500));
-  assert.equal(messages.join('\n\n'), paragraphs.join('\n\n'), 'no content is lost or reordered');
+test('A7: a code block with inner blank lines longer than the old target stays one rich message', async () => {
+  // 回归：旧实现先按空行把答案拆成 ~1600 片段，代码块中间的空行会把围栏拆成
+  // 两半，每个片段都退化成纯文本，代码失去渲染。现在整段交给 #sendRich 的
+  // fence-aware 切分，围栏完整保留。
+  const plain = [];
+  const rich = [];
+  const api = {
+    sendMessage: async (params) => { plain.push(params); return { message_id: 8000 + plain.length }; },
+    sendRichMessage: async (params) => { rich.push(params); return { message_id: 9000 + rich.length }; },
+  };
+  const client = new TelegramBotClient({ api, signal: undefined, logger: quietLogger });
+  const stream = client.openThinkingStream({ chatId: 42, replyToMessageId: 7 });
+  await stream.sendThinking('Let me write the script.');
+  const code = '```python\n' + 'print("a")\n'.repeat(80) + '\n' + 'print("b")\n'.repeat(80) + '```';
+  const answer = `Here is the script:\n\n${code}\n\nDone.`;
+  assert.ok(answer.length > 1_600, 'the answer must span the old 1600-char target');
+  const result = await stream.finish({ text: answer, format: 'markdown' });
+  assert.equal(rich.length, 1, 'the whole answer renders as a single rich message');
+  assert.equal(plain.length, 1, 'only the trace line is plain; no code-fence fallback');
+  assert.equal(plain[0].text, '💭 Let me write the script.');
+  assert.equal(rich[0].richMessage.markdown, answer, 'code block with inner blank line stays intact');
+  assert.equal(result.deliveryOutcome, 'sent');
+  assert.deepEqual(stream.providerMessageIds, ['8001', '9001']);
 });
 
-test('A8: splitAnswerIntoMessages hard-splits an oversized single paragraph', () => {
-  const messages = splitAnswerIntoMessages('a'.repeat(12_000));
-  assert.equal(messages.length, 3);
-  for (const message of messages) assert.ok(message.length <= 4_000);
-  assert.equal(messages.join(''), 'a'.repeat(12_000));
+test('A8: consecutive blank lines inside a multi-line string are preserved verbatim', async () => {
+  // 回归：旧实现 split(/\n{2,}/) 后用固定 \n\n 拼接，把 first\n\n\nsecond 压成
+  // first\n\nsecond，改变了多行字符串本身的值。现在内容逐字保留。
+  const plain = [];
+  const rich = [];
+  const api = {
+    sendMessage: async (params) => { plain.push(params); return { message_id: 8100 + plain.length }; },
+    sendRichMessage: async (params) => { rich.push(params); return { message_id: 9100 + rich.length }; },
+  };
+  const client = new TelegramBotClient({ api, signal: undefined, logger: quietLogger });
+
+  // 纯文本答案：连续空行（3 个换行）逐字保留。
+  const stream = client.openThinkingStream({ chatId: 42 });
+  const plainAnswer = 's = """\nfirst\n\n\nsecond\n"""\n\nprint(s)';
+  const result = await stream.finish(plainAnswer);
+  assert.equal(plain.length, 1);
+  assert.equal(plain[0].text, plainAnswer, 'three newlines stay three newlines');
+  assert.equal(result.deliveryOutcome, 'sent');
+
+  // 同样的内容放在代码块里走富文本路径：也逐字保留。
+  const streamTwo = client.openThinkingStream({ chatId: 42 });
+  const codeAnswer = '```python\ns = """\nfirst\n\n\nsecond\n"""\n```';
+  const resultTwo = await streamTwo.finish({ text: codeAnswer, format: 'markdown' });
+  assert.equal(rich.length, 1);
+  assert.equal(rich[0].richMessage.markdown, codeAnswer, 'blank lines inside the fence are untouched');
+  assert.equal(resultTwo.deliveryOutcome, 'sent');
 });
 
-test('A8b: splitAnswerIntoMessages preserves indentation after a blank line', () => {
-  // 空行后的代码缩进是内容：旧实现按段 trim 会把 `    return x` 变成 `return x`。
-  const answer = 'def f():\n    x = 1\n\n    return x';
-  assert.deepEqual(splitAnswerIntoMessages(answer), [answer]);
-  // 超硬限段落跨片时，空行后的缩进段仍完整保留。
+test('A8b: a long plain answer splits at 4000 without losing or rewriting content', async () => {
+  const plain = [];
+  const api = {
+    sendMessage: async (params) => { plain.push(params); return { message_id: 8200 + plain.length }; },
+    sendRichMessage: async () => { throw new Error('plain answers must not use the rich path'); },
+  };
+  const client = new TelegramBotClient({ api, signal: undefined, logger: quietLogger });
+  const stream = client.openThinkingStream({ chatId: 42 });
+  // 空行后的代码缩进是内容，旧实现按段 trim 会把 `    return x` 变成 `return x`。
   const body = ('x'.repeat(50) + '\n').repeat(90); // 4590 字符 > 4000
-  const longAnswer = `${body.trimEnd()}\n\n    return x`;
-  const messages = splitAnswerIntoMessages(longAnswer);
-  assert.ok(messages.every((message) => message.length <= 4_000));
+  const answer = `${body.trimEnd()}\n\n    return x`;
+  const result = await stream.finish(answer);
+  assert.ok(plain.length >= 2);
+  assert.ok(plain.every((params) => Array.from(params.text).length <= 4_000));
+  assert.equal(plain.map((params) => params.text).join(''), answer, 'no content is lost or reordered');
   assert.ok(
-    messages.some((message) => message.includes('    return x')),
+    plain.some((params) => params.text.includes('    return x')),
     'the indented line keeps its four leading spaces',
   );
+  assert.equal(result.deliveryOutcome, 'sent');
 });
 
-test('A8c: splitAnswerIntoMessages never cuts a surrogate pair at the boundary', () => {
-  // 评审复现：3999 个 'a' + '😀'（limit 4000）时旧实现把 Emoji 拆成两个孤立代理项。
+test('A8c: plain chunking never cuts a surrogate pair at the boundary', async () => {
+  // 评审复现：3999 个 'a' + '😀'（limit 4000）时切分可能把 Emoji 拆成两个孤立代理项。
+  const plain = [];
+  const api = {
+    sendMessage: async (params) => { plain.push(params); return { message_id: 8300 + plain.length }; },
+    sendRichMessage: async () => { throw new Error('plain answers must not use the rich path'); },
+  };
+  const client = new TelegramBotClient({ api, signal: undefined, logger: quietLogger });
+  const stream = client.openThinkingStream({ chatId: 42 });
   const answer = 'a'.repeat(3999) + '😀' + 'b'.repeat(50);
-  const messages = splitAnswerIntoMessages(answer);
-  assert.ok(messages.every((message) => message.length <= 4_000));
-  assert.equal(messages.join(''), answer);
+  const result = await stream.finish(answer);
+  assert.ok(plain.length >= 2);
+  assert.ok(plain.every((params) => Array.from(params.text).length <= 4_000));
+  assert.equal(plain.map((params) => params.text).join(''), answer);
   // 强断言：切点落在 Emoji 之前，代理项不跨片。
-  assert.equal(messages[0], 'a'.repeat(3999));
-  assert.ok(messages[1].startsWith('😀'));
+  assert.equal(plain[0].text, 'a'.repeat(3999));
+  assert.ok(plain[1].text.startsWith('😀'));
+  assert.equal(result.deliveryOutcome, 'sent');
 });
 
 // --- A9/A10: openThinkingStream over a stub api ---------------------------
