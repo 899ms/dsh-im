@@ -6,22 +6,88 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.21.2] - 2026-09-17
+
 ### Fixed / 修复
 
-- 微信启动配置错误现在标明具体配置文件、字段位置和校验原因，区分 JSON 语法错误、账号标识不匹配、重复账号、工作区路径及模型等配置问题；页面、复制诊断和参考号对应的 Host 日志保留相同定位信息，并明确修复后需要重启 DSH。字段位置使用从 0 开始的条目序号，不输出账号、配置值、凭据或本机绝对路径。
-  WeChat startup configuration errors now identify the configuration file, field position, and validation issue, distinguishing JSON syntax errors, mismatched or duplicate account identities, invalid workspace paths, and other settings errors. The settings page, copied diagnostics, and correlated Host log retain the same details and explain that DSH must restart after a fix. Field positions use zero-based entry indexes without exposing account identities, configuration values, credentials, or absolute local paths.
-
-- 批量输入模式下，引用一条消息再发送 `/send`、`/cancel` 或重复的 `/batch` 不再被当作「未收录的内容」拒绝：命令本身不贡献内容，要求纯文本的只是被收录的文字，因此现在会照常提交、取消或显示进度。同时提交内容严格等于已收录的文字，命令消息自带的引用与附件（企业微信引用、QQ 引用与附件、飞书引用话题、Slack/Telegram/Discord/WhatsApp 的回复引用）不会再混进批量内容。空闲状态下带引用发送 `/send`、`/cancel` 也会返回各自的准确提示，而不是「批量输入命令仅支持纯文字」。
-  In batch input mode, quoting a message and then sending `/send`, `/cancel`, or a repeated `/batch` is no longer refused as uncollectable content: a command contributes no content, so only the collected text must be plain, and the command now submits, cancels, or reports progress as usual. A submission is exactly the collected text — the quote or attachment carried by the command message (a WeCom quote, a QQ quote or attachment, a Feishu quoted topic, or a Slack/Telegram/Discord/WhatsApp reply reference) no longer leaks into the batch. While idle, a quoted `/send` or `/cancel` now answers with its own state message instead of the plain-text rule.
-- 批量提交的会话标题改为取第一条已收录内容，不再使用 dsh-im 自己拼接的框架句和 `[消息 N]` 标签，避免插件文字出现在会话标题里。
-  A batch submission now names its conversation after the first collected message instead of dsh-im's own framing sentence and `[消息 N]` labels, so plugin-authored text no longer appears in the session title.
-
-  感谢 [@Librazy](https://github.com/Librazy) 的代码、文档与测试贡献（[#205](https://github.com/xmanrui/dsh-im/pull/205)）。Thanks to [@Librazy](https://github.com/Librazy) for the code, documentation, and tests in [#205](https://github.com/xmanrui/dsh-im/pull/205).
+- 修复 Lark（飞书国际版）应用无法通过手动凭据入口接入的问题（[#212](https://github.com/xmanrui/dsh-im/issues/212)）。飞书设置页的「手动接入」可选择飞书或 Lark，绑定请求将所选平台传给 Host，并沿用该平台进行凭据验证、配置保存及 HTTP／WebSocket 连接；未指定平台的旧请求仍默认使用飞书。感谢 [@alpacachen](https://github.com/alpacachen) 的代码与测试贡献（[#219](https://github.com/xmanrui/dsh-im/pull/219)）。
+  Fixed Lark (international Feishu) applications being unable to connect through manual credential binding ([#212](https://github.com/xmanrui/dsh-im/issues/212)). The Feishu settings page now offers a Feishu/Lark platform selector for manual setup. The selected platform is passed to the Host and used for credential verification, persisted configuration, and HTTP/WebSocket connections; existing requests without a platform still default to Feishu. Thanks to [@alpacachen](https://github.com/alpacachen) for code and tests in [#219](https://github.com/xmanrui/dsh-im/pull/219).
+- 切换应用平台时清空已填写的 App ID、App Secret 和旧错误，避免跨平台复用凭据；提交期间锁定表单及平台选择，防止重复提交。补齐 Lark 绑定表单和成功提示的中英文文案，Host 仅接受 `feishu`、`lark` 或省略的平台值。
+  Changing platforms clears the entered App ID, App Secret, and previous error to avoid reusing credentials across platforms. The form and platform selector are locked during submission to prevent duplicate requests. Added bilingual Lark form and success messages; the Host accepts only `feishu`, `lark`, or an omitted platform value.
 
 ### Documentation / 文档
 
-- 明确首次开启批次需要纯文字 `/batch`，收集期间才支持通过带引用的 `/batch` 查看进度；中英文指南同步更新，并补充贡献者名单。
-  Clarified that starting a batch requires a plain-text `/batch`, while a quoted `/batch` reports progress only during collection. Updated both command guides and contributor lists.
+- 补充自定义域名访问 IM 管理接口时的 HTTP 403 排查说明：通过 DSH 的 `--trusted-host` 配置域名及可选端口，反向代理需保留匹配的 Host／Origin，浏览器认证仍然必需；该文档更新不放宽访问控制。
+  Documented HTTP 403 troubleshooting for IM management through custom domains: configure the domain and optional port with DSH's `--trusted-host`, preserve matching Host/Origin values through reverse proxies, and retain browser authentication. This documentation update does not relax access controls.
+- 扩展局域网管理验证脚本，覆盖回环地址、局域网地址、自定义域名、未认证访问及 Host／Origin 不匹配，并等待渠道初始化完成后检查业务状态；新增 Lark 界面、RPC、配置持久化和运行时域名选择的回归测试。
+  Expanded the LAN management verification script to cover loopback, LAN addresses, custom domains, unauthenticated access, and Host/Origin mismatches, waiting for channel initialization before checking business status. Added Lark regression tests for the UI, RPC validation, persisted configuration, and runtime domain selection.
+
+## [4.21.1] - 2026-09-16
+
+### Fixed / 修复
+
+- 修复钉钉群聊和私聊中引用图片、文件、富文本图片及音视频附件时，模型只收到引用说明而无法读取实际内容的问题（[#211](https://github.com/xmanrui/dsh-im/issues/211)）。仅解析直接引用的一层附件，保留当前消息附件并按下载引用去重；命令、权限校验与交互路由完成后才下载。缺少下载信息或下载失败时明确提示，不再把仅有元数据的请求送入模型。
+  Fixed quoted images, files, rich-text images, and audio/video attachments in DingTalk group and direct chats reaching the model as descriptions without their actual content ([#211](https://github.com/xmanrui/dsh-im/issues/211)). Only the immediate quote is resolved, current attachments are preserved, and matching download references are deduplicated. Downloads happen after command, access, and interaction routing; missing references or failed downloads report an error instead of submitting metadata alone.
+- 微信文件上传改为分块流式加密，由网络背压控制读取，减少整份密文复制。将固定 60 秒上传截止时间改为 60 秒无进展超时，持续传输的大文件不再因总耗时超过一分钟被中断；重试重新创建加密流，用户取消立即停止，失败不发送文件消息，并提供明确的上传超时提示。
+  Weixin file uploads now encrypt in chunks with network backpressure, reducing whole-file ciphertext copies. A 60-second idle timeout replaces the fixed upload deadline, allowing transfers that continue making progress to exceed one minute. Retries recreate the encrypted stream, caller cancellation stops immediately, and failed uploads never send a file message and report an explicit timeout when stalled.
+- IM 来源块与引用块按实际消息身份配对，在支持的 Host 中拆成独立、可折叠的 `dsh-im` 上下文行；用户消息保留自己的正文，引用材料排在提问之前，并发或在途消息不会串用来源。只选择 `botId`、`chatId` 或 `threadId` 时仍正确拆分，无法生成摘要时使用「来源」标题；不支持拆分或连接外部 Harness 时保留内联回退。
+  IM source and quoted-reply blocks are paired by message identity and split into separate, collapsible `dsh-im` context rows on supported Hosts. User messages retain their own text, quotations precede the question, and concurrent or in-flight prompts cannot exchange sources. ID-only field selections still split correctly and use a Source label when no readable summary exists; unsupported Hosts and external Harness connections retain the inline fallback.
+- `/补充指令`（`/steer`）按执行时的增强配置记录实际下达指令者的来源，卡片使用操作者身份，菜单和消息使用发送者身份，不再借用开启该回合的消息来源。感谢 [@Librazy](https://github.com/Librazy) 的实现、测试与文档贡献（[#204](https://github.com/xmanrui/dsh-im/pull/204)）。
+  `/steer` captures enhancement settings when the correction is issued and records its actual author: the card operator or the menu/message sender, rather than the author of the turn's opening message. Thanks to [@Librazy](https://github.com/Librazy) for implementation, tests, and documentation in [#204](https://github.com/xmanrui/dsh-im/pull/204).
+
+### Changed / 变更
+
+- 上下文增强提示词登记为会话级动态提示词上下文，不再逐条消息重复，配置变化时重新渲染。提示词中的 `{{变量}}` 按部署注册的变量解析，未知或格式错误的变量会使当前步骤失败；是否保留动态上下文由 Host 部署策略决定。
+  Context-enhancement guidance is registered as Session-level dynamic prompt context instead of repeating in each message, and re-rendered when its configuration changes. `{{variable}}` references use the deployment's registered template variables; unknown or malformed references fail the current step. Host deployment policy controls whether dynamic context is retained.
+
+### Security / 安全
+
+- 会话增强提示词仅来自渠道捕获的配置，不从用户消息中的仿造标签回读；关闭增强时清除登记。来源块采用受限字段识别，避免将形状不符的用户 JSON 误当成插件上下文。
+  Session guidance comes only from configuration captured by the channel, never from lookalike tags in user text, and is cleared when enhancement is disabled. Source blocks use restricted-field recognition so unrelated user JSON is not mistaken for plugin context.
+
+### Documentation / 文档
+
+- 更新上下文增强说明和钉钉引用附件修复记录，补充消息配对、纠偏来源、实际附件内容、微信流式上传、超时重试及取消的回归测试。
+  Updated context-enhancement guidance and DingTalk quoted-attachment repair notes, with regression tests for message pairing, correction provenance, actual attachment content, Weixin streaming uploads, timeout retries, and cancellation.
+
+## [4.21.0] - 2026-09-16
+
+### Added / 新增
+
+- Telegram 单选型 Harness 提问支持 Inline Keyboard，点击按钮即可提交，编号文字回复仍然有效。多选、超过八个选项、按钮标签不可用或平台拒绝键盘时回退到文本流程；回调数据使用短编码并校验 Telegram 的 64 字节限制（[#199](https://github.com/xmanrui/dsh-im/issues/199)）。感谢 [@wings1848](https://github.com/wings1848) 的代码、文档与测试贡献（[#206](https://github.com/xmanrui/dsh-im/pull/206)）。
+  Telegram single-choice Harness questions now support inline keyboards: press a button to answer, or keep replying with numbered text. Multi-select questions, more than eight options, unusable button labels, or keyboard rejection fall back to text. Compact callback data is validated against Telegram's 64-byte limit ([#199](https://github.com/xmanrui/dsh-im/issues/199)). Thanks to [@wings1848](https://github.com/wings1848) for code, documentation, and tests in [#206](https://github.com/xmanrui/dsh-im/pull/206).
+
+### Fixed / 修复
+
+- Harness 提问允许 IM 与 Web／CLI 同时呈现，先作答者生效；另一端及时收回待答项和卡片。取消范围限定到当前问题，避免 IM 正常作答误取消外层 `run_code`／PTC 执行，真正的上游取消仍会传递。
+  Harness questions can be presented on IM and Web/CLI together, with the first answer winning and the other side's pending question and card retired. Cancellation is scoped to the current question, so an IM answer does not cancel an enclosing `run_code`/PTC execution, while genuine upstream cancellation still propagates.
+- Telegram 卡片提交前等待展示完成，拒绝提交期间的重复点击；文字回答也会回收旧键盘，旧卡片不能回答后续问题。数字标签按钮直接提交所选选项，不再把标签误解析为位置序号；手动输入数字仍按位置选择。宿主应答链仅对 `NO_PROVIDER` 静默降级，其他错误保留日志。
+  Telegram card answers wait for presentation to finish, reject duplicate presses during submission, and retire keyboards after text answers so stale cards cannot answer later questions. Numeric button labels submit the exact selected option instead of being reinterpreted as positions; typed numbers still select by position. Only `NO_PROVIDER` is silently handled in the host answerer chain; other failures are logged.
+- 批量输入收集期间，带引用的 `/send`、`/cancel` 和重复 `/batch` 正常提交、取消或报告进度；空闲时的 `/send`、`/cancel` 返回准确状态。命令携带的引用或附件不混入批量内容，会话标题取第一条已收录内容，而非插件框架句。首次开启批次仍需要纯文字 `/batch`。感谢 [@Librazy](https://github.com/Librazy) 的代码、文档与测试贡献（[#205](https://github.com/xmanrui/dsh-im/pull/205)）。
+  During batch collection, quoted `/send`, `/cancel`, and repeated `/batch` commands submit, cancel, or report progress normally; idle `/send` and `/cancel` return accurate state messages. Command-carried quotes and attachments stay out of submissions, and Session titles use the first collected message rather than plugin framing. Starting a batch still requires plain-text `/batch`. Thanks to [@Librazy](https://github.com/Librazy) for code, documentation, and tests in [#205](https://github.com/xmanrui/dsh-im/pull/205).
+- QQ 本地状态 JSON 损坏时，先以独占文件保存原始字节备份，再重建状态，避免机器人因解析失败无法启动（[#215](https://github.com/xmanrui/dsh-im/issues/215)）。恢复会重置该机器人的会话映射、消息去重和延迟投递记录，并在 Host 日志中提示；备份失败时保留原文件，读取、备份和写入失败分别通过管理接口报告。
+  Corrupt QQ state JSON is backed up byte-for-byte to an exclusive file before state is rebuilt, allowing startup to recover from parse errors ([#215](https://github.com/xmanrui/dsh-im/issues/215)). Recovery resets that bot's Session mappings, message deduplication, and deferred-delivery records and reports this in Host logs. A failed backup preserves the original file; read, backup, and write failures retain distinct management-interface errors.
+- 微信启动配置错误标明配置文件、从零开始的字段位置和校验原因，区分 JSON 语法、账号标识、重复账号、工作区及模型配置等问题；页面、复制诊断和参考号对应日志保持一致，不包含账号、配置值、凭据或本机绝对路径，并明确修复配置后需要重启 DSH。
+  Weixin startup configuration errors identify the file, zero-based field position, and validation issue, distinguishing JSON syntax, account identity, duplicates, workspace, and model settings. The page, copied diagnostics, and correlated logs retain matching details without account identities, configuration values, credentials, or absolute local paths, and explain that DSH must restart after configuration repair.
+- `dsh_im_return_file` 优先采用 Session 事件流观察到的活动回合，修复实际宿主不公开事件快照时误报 `artifact-context-required`、文件无法进入投递流程的问题；回合已结束或缺少活动证据时仍拒绝暂存。感谢 [@Dong09](https://github.com/Dong09) 的贡献（[#210](https://github.com/xmanrui/dsh-im/pull/210)）。
+  `dsh_im_return_file` now prefers the active turn observed on the Session event stream, fixing `artifact-context-required` errors that blocked delivery when the host exposed no event snapshot. Staging still rejects closed turns or Sessions without activity evidence. Thanks to [@Dong09](https://github.com/Dong09) for [#210](https://github.com/xmanrui/dsh-im/pull/210).
+- Telegram 移除机器人提及时使用原文偏移，避免 Unicode 大小写转换改变长度后残留提及或误删其他用户名，同时覆盖文字与媒体说明。
+  Telegram mention removal uses original text offsets, avoiding retained mentions or damaged usernames when Unicode case conversion changes string length, for both text and media captions.
+
+### Changed / 变更
+
+- 将正常的模型思考强度说明移入帮助提示，失效配置仍在设置区显式提醒；统一 Slack、iMessage 的渠道图标与应用图标。
+  Moved normal reasoning-effort guidance into the help tooltip while keeping unavailable-setting warnings visible, and aligned Slack and iMessage channel icons with their app icons.
+
+### Security / 安全
+
+- 减少动态正则与动态日志格式字符串，强化标识校验和配置目录错误处理；更新锁文件中的 `qs`、`sharp`／libvips 间接依赖，并将 CI Actions 固定到提交 SHA。感谢 [@johnslee1207-commits](https://github.com/johnslee1207-commits) 的代码、测试与基础设施贡献（[#214](https://github.com/xmanrui/dsh-im/pull/214)）。
+  Reduced dynamic regular expressions and log format strings, strengthened identity validation and configuration-directory error handling, updated locked `qs` and `sharp`/libvips transitive dependencies, and pinned CI Actions to commit SHAs. Thanks to [@johnslee1207-commits](https://github.com/johnslee1207-commits) for code, tests, and infrastructure in [#214](https://github.com/xmanrui/dsh-im/pull/214).
+
+### Documentation / 文档
+
+- 同步中英文交互与批量命令说明、贡献者名单、渠道徽章和截图，并完善跨平台测试及 Windows 包校验兼容性。
+  Updated bilingual interaction and batch-command guidance, contributor lists, channel badges, and screenshots, and improved cross-platform tests and Windows package verification.
 
 ## [4.20.2] - 2026-09-13
 
@@ -36,6 +102,7 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 - 补充 #199 的复现、根因与修复验证记录；新增回归用例覆盖在途草稿、迟到进度、后续心跳、答案提交和最终消息投递。
   Recorded the reproduction, root cause, and validation for #199, and added regression coverage for in-flight drafts, late progress, subsequent heartbeats, answer submission, and final-message delivery.
+
 
 ## [4.20.1] - 2026-09-12
 
@@ -1030,7 +1097,10 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.20.2...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.21.2...HEAD
+[4.21.2]: https://github.com/xmanrui/dsh-im/compare/v4.21.1...v4.21.2
+[4.21.1]: https://github.com/xmanrui/dsh-im/compare/v4.21.0...v4.21.1
+[4.21.0]: https://github.com/xmanrui/dsh-im/compare/v4.20.2...v4.21.0
 [4.20.2]: https://github.com/xmanrui/dsh-im/compare/v4.20.1...v4.20.2
 [4.20.1]: https://github.com/xmanrui/dsh-im/compare/v4.20.0...v4.20.1
 [4.20.0]: https://github.com/xmanrui/dsh-im/compare/v4.19.2...v4.20.0
