@@ -743,9 +743,14 @@ export class TextHarnessBridge {
           );
         }
       }
+      // What the model sees. A message may carry two texts: `controlText`, the
+      // plain body the parsers read, and `content`, the same body decorated for
+      // the model — the email channel prefixes the mail headers there, so a
+      // subject-only instruction is not silently dropped. Falling back to the
+      // parsed text kept commands working but lost that decoration entirely.
       let content = hasImages || hasReply
         ? await promptContentForInboundMessage(message, { signal: this.#signal })
-        : undefined;
+        : cleanText(message.content) || undefined;
       const snapshot = this.#acceptedMessageIds.get(messageId);
       let contextEnhanced = false;
       if (snapshot) {
