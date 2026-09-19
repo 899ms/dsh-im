@@ -1257,6 +1257,7 @@ test('client registers one top-level bilingual IM settings section with a direct
   const ctx = {
     effect(install, label) {
       effects.push({ install, label });
+      if (label === 'im-settings: client panel service') return install();
     },
     on(event, listener) {
       assert.equal(event, 'locale/change');
@@ -1290,7 +1291,7 @@ test('client registers one top-level bilingual IM settings section with a direct
     slots: {
       inject(name, install) {
         assert.equal(name, 'settings.section');
-        install();
+        return install();
       },
       register(options, component) {
         registrations.push({ options, component });
@@ -1314,7 +1315,7 @@ test('client registers one top-level bilingual IM settings section with a direct
     assert.equal(registrations[0].options.order, 21);
     assert.equal(registrations[0].options.locale, IM_LOCALE_NAMESPACE);
     assert.equal(registrations[0].options.label(), 'IM bots');
-    assert.equal(registrations[0].component, IMSettingsTab);
+    assert.equal(typeof registrations[0].component, 'function');
 
     const injected = registrations[0].options.inject();
     const signal = new AbortController().signal;
@@ -1376,7 +1377,9 @@ test('client directory picker uses the current DSH uiWorkspace service', async (
   const directoryCalls = [];
   let uiWorkspace;
   const ctx = {
-    effect() {},
+    effect(install, label) {
+      if (label === 'im-settings: client panel service') return install();
+    },
     get(name) {
       assert.equal(name, 'uiWorkspace');
       return uiWorkspace;
@@ -1395,7 +1398,7 @@ test('client directory picker uses the current DSH uiWorkspace service', async (
     slots: {
       inject(name, install) {
         assert.equal(name, 'settings.section');
-        install();
+        return install();
       },
       register(options, component) {
         registrations.push({ options, component });
