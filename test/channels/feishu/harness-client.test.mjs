@@ -1467,3 +1467,54 @@ test('ask() publishes the guidance a channel captured and never reads the prompt
   await client.ask(sessionId, '普通消息', { timeoutMs: 450, sourceGuidance: '' });
   assert.equal(imSourceGuidance.get(sessionId), undefined);
 });
+
+test('tracker surfaces live reasoning that streams before the turn binds', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-early', afterSeq: 0 });
+
+  // Reasoning streams before the durable user/message binds the turn
+  // (order: turn/start, step/start, reasoning, user/message). It must still
+  // surface, using the turn carried on the event, without advancing lastSeq —
+  // otherwise Live process mode shows tool calls but drops the thinking text.
+  const early = tracker.consumeAll([
+    { type: 'turn/start', seq: 1, data: { turn: 7 } },
+    { type: 'assistant/chunk', seq: 1.5, data: {
+      turn: 7,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '绑定前推理' },
+    } },
+  ], { live: true });
+
+  assert.deepEqual(early, [
+    { type: 'reasoning', turn: 7, text: '绑定前推理' },
+  ]);
+  // The transient (fractional) frame must not touch the durable cursor,
+  // so the reconnect guard for durable events stays intact.
+  assert.equal(tracker.lastSeq, 0);
+
+  // The same fractional frame is deduped on replay.
+  assert.deepEqual(tracker.consumeAll([
+    { type: 'assistant/chunk', seq: 1.5, data: {
+      turn: 7,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '绑定前推理' },
+    } },
+  ], { live: true }), []);
+
+  // Once the durable user/message binds, normal streaming continues intact.
+  const bound = tracker.consumeAll([
+    { type: 'user/message', seq: 2, data: { turn: 7, source: { rpcId: 'rpc-early' } } },
+    { type: 'assistant/chunk', seq: 3, data: {
+      turn: 7,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '绑定后推理' },
+    } },
+    { type: 'turn/end', seq: 4, data: { turn: 7, reason: { kind: 'completed' } } },
+  ], { live: true });
+
+  assert.deepEqual(bound, [
+    { type: 'turn-start', turn: 7 },
+    { type: 'reasoning', turn: 7, text: '绑定后推理' },
+    { type: 'turn-end', turn: 7, reason: { kind: 'completed' } },
+  ]);
+  assert.equal(tracker.lastSeq, 4);
+});

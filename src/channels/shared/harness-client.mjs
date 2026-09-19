@@ -588,6 +588,22 @@ export class HarnessReplyTracker {
         && Number.isFinite(seq)
         && !Number.isInteger(seq);
       if (this.#targetTurn === null) {
+        // Reasoning streams before the durable user/message binds the turn
+        // (order: turn/start, step/start, reasoning, user/message). Gating it
+        // on binding drops the thinking entirely. Live reasoning frames carry
+        // their own turn and a transient (fractional) seq, so surface them by
+        // that turn without advancing #lastSeq — the reconnect guard for
+        // durable events stays intact, and the consumer opens the run lazily.
+        if (live && lateReasoningChunk) {
+          if (this.#transientSeqs.has(seq)) continue;
+          this.#transientSeqs.add(seq);
+          const text = event.data?.chunk?.text;
+          const turn = event.data?.turn ?? this.#openTurn;
+          if (typeof text === 'string' && text && turn !== null && turn !== undefined) {
+            pushUpdate({ type: 'reasoning', turn, text });
+          }
+          continue;
+        }
         if (seq <= this.#lastSeq) continue;
         if (event.type === 'turn/start') {
           this.#openTurn = event.data?.turn ?? null;
