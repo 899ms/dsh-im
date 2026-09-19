@@ -114,6 +114,24 @@ test('FeishuLiveCot bounds tool output and closes failed turns', async () => {
   });
 });
 
+test('FeishuLiveCot keeps visible text when native event content is truncated', async () => {
+  const { cot, calls } = fixture();
+  const longText = 'x'.repeat(8_000);
+
+  await cot.handle({ type: 'turn-start', turn: 9 });
+  await cot.handle({ type: 'reasoning', turn: 9, text: longText });
+  await cot.finish();
+
+  const content = decoded(calls)
+    .find(({ type }) => type === 'REASONING_MESSAGE_CONTENT')
+    .content;
+  assert.equal(content.truncated, true);
+  assert.equal(typeof content.delta, 'string');
+  assert.ok(content.delta.length > 0);
+  assert.ok(content.delta.length < longText.length);
+  assert.ok(JSON.stringify(content).length <= 4_096);
+});
+
 for (const reason of [
   { kind: 'max-tokens' },
   { kind: 'blocked' },

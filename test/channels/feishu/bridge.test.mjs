@@ -8981,7 +8981,12 @@ test('step push live_cot mode uses Feishu native process and sends the final ans
       assert.equal(options.progressMode, 'live');
       await options.onUpdate({ type: 'turn-start', turn: 4 });
       await options.onUpdate({ type: 'reasoning', turn: 4, text: '分析请求' });
-      await options.onUpdate({ type: 'assistant-message', turn: 4, step: 0, text: '先读取文件' });
+      await options.onUpdate({
+        type: 'assistant-message',
+        turn: 4,
+        step: 0,
+        text: 'PROCESS_MARKER_9f3a 先读取文件',
+      });
       await options.onUpdate({
         type: 'tool',
         turn: 4,
@@ -8995,9 +9000,9 @@ test('step push live_cot mode uses Feishu native process and sends the final ans
         callId: 'call-live',
         text: '文件内容',
       });
-      await options.onUpdate({ type: 'assistant-message', turn: 4, step: 1, text: '最终答案' });
+      await options.onUpdate({ type: 'assistant-message', turn: 4, step: 1, text: 'FINAL_MARKER_9f3a 过程候选' });
       await options.onUpdate({ type: 'turn-end', turn: 4, reason: { kind: 'completed' } });
-      return '最终答案';
+      return 'PROCESS_MARKER_9f3a 先读取文件\n\nFINAL_MARKER_9f3a 过程候选';
     }),
     state: fixture.state,
     status: bridgeStatus(),
@@ -9027,7 +9032,8 @@ test('step push live_cot mode uses Feishu native process and sends the final ans
     'TOOL_CALL_RESULT',
     'RUN_FINISHED',
   ]);
-  assert.deepEqual(sent, ['最终答案']);
+  assert.deepEqual(sent, ['FINAL_MARKER_9f3a 过程候选']);
+  assert.ok(!sent.at(-1).includes('PROCESS_MARKER_9f3a'));
 });
 
 test('step push: tools and assistant notes push as discrete messages, final answer only in card', async () => {

@@ -587,6 +587,19 @@ export class HarnessReplyTracker {
         && event.data?.chunk?.type === 'reasoning-delta'
         && Number.isFinite(seq)
         && !Number.isInteger(seq);
+      if (this.#targetTurn === null) {
+        if (seq <= this.#lastSeq) continue;
+        if (event.type === 'turn/start') {
+          this.#openTurn = event.data?.turn ?? null;
+          continue;
+        }
+        if (event.type === 'user/message' && event.data?.source?.rpcId === this.#promptRpcId) {
+          this.#lastSeq = seq;
+          this.#targetTurn = event.data?.turn ?? this.#openTurn;
+          if (live) pushUpdate({ type: 'turn-start', turn: this.#targetTurn });
+        }
+        continue;
+      }
       if (lateReasoningChunk) {
         if (this.#transientSeqs.has(seq)) continue;
         this.#transientSeqs.add(seq);
@@ -598,7 +611,7 @@ export class HarnessReplyTracker {
       if (event.type === 'turn/start') this.#openTurn = event.data?.turn ?? null;
 
       if (event.type === 'user/message' && event.data?.source?.rpcId === this.#promptRpcId) {
-        this.#targetTurn = this.#openTurn;
+        this.#targetTurn = event.data?.turn ?? this.#openTurn;
         if (live) pushUpdate({ type: 'turn-start', turn: this.#targetTurn });
         continue;
       }

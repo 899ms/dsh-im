@@ -14,14 +14,31 @@ const TOOL_ICONS = Object.freeze({
 
 let lastTimestamp = 0;
 
-function cotEvent(eventType, content) {
+function boundedEventContent(content) {
   const encoded = JSON.stringify(content);
+  if (encoded.length <= MAX_EVENT_CONTENT_CHARS) return encoded;
+  const field = typeof content?.delta === 'string'
+    ? 'delta'
+    : typeof content?.message === 'string' ? 'message' : null;
+  if (!field) return JSON.stringify({ ...content, truncated: true });
+
+  const truncated = { ...content, truncated: true, [field]: content[field] };
+  while (truncated[field].length > 0
+    && JSON.stringify(truncated).length > MAX_EVENT_CONTENT_CHARS) {
+    truncated[field] = truncated[field].slice(0, Math.max(0, truncated[field].length - 256));
+  }
+  if (truncated[field].length === 0
+    && JSON.stringify(truncated).length > MAX_EVENT_CONTENT_CHARS) {
+    return JSON.stringify({ truncated: true });
+  }
+  return JSON.stringify(truncated);
+}
+
+function cotEvent(eventType, content) {
   lastTimestamp = Math.max(Date.now(), lastTimestamp + 1);
   return {
     event_type: eventType,
-    content: encoded.length <= MAX_EVENT_CONTENT_CHARS
-      ? encoded
-      : JSON.stringify({ ...content, truncated: true, delta: undefined }),
+    content: boundedEventContent(content),
     timestamp: String(lastTimestamp),
   };
 }

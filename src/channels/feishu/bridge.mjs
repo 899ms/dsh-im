@@ -5029,6 +5029,11 @@ export class FeishuHarnessBridge {
         onUpdate: async (update) => {
           if (liveCot) {
             await cot.handle(update);
+            if (update.type === 'assistant-message') {
+              pendingStep = update;
+            } else if (update.type === 'tool') {
+              pendingStep = null;
+            }
             return;
           }
           if (update.type === 'assistant-message') {
