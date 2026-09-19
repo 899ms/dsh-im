@@ -74,6 +74,15 @@ import { beginStatusReaction } from './status-reaction.mjs';
 const INTERACTION_RESOLVED_TEXT = '这个问题已在其他客户端处理，无需再次回答。';
 const FILE_ONLY_COMPLETION_TEXT = '任务已完成。';
 
+/**
+ * How many times one inbound message may be re-delivered after a failed turn.
+ *
+ * A failure releases the message's `markSeen` so the next poll retries it, which
+ * would otherwise loop forever on a mail that always fails. After this many
+ * attempts the mark stays and the message is treated as handled.
+ */
+const MAX_DELIVERY_ATTEMPTS = 3;
+
 function cleanText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -83,7 +92,7 @@ function canClaimInteractionReply(message, pending, senderId) {
     && (message.kind !== 'group' || message.addressed === true)
     && !hasInboundImages(message)
     && !hasInboundFiles(message)
-    && Boolean(cleanText(message.content));
+    && Boolean(controlTextOf(message));
 }
 
 function artifactFailureText(fileName, error, descriptor) {
@@ -138,6 +147,18 @@ export function createTextBridgeStatus() {
   };
 }
 
+/**
+ * The text a channel's control commands and approval decisions are parsed from.
+ *
+ * A channel may decorate `content` for the model — the email channel prepends
+ * the mail headers so a subject line reaches the model — while `controlText`
+ * keeps the undecorated body. Without this a decorated message made `/help`
+ * and "批准" unrecognisable.
+ */
+function controlTextOf(message) {
+  return cleanText(message?.controlText ?? message?.content);
+}
+
 export class TextHarnessBridge {
   #descriptor;
   #bot;
@@ -161,6 +182,10 @@ export class TextHarnessBridge {
   #approvals;
   #batches = new BatchInputManager();
   #interactionCard;
+  // Delivery attempts per message id. A failed turn releases its `markSeen` so
+  // the next poll can retry, and this counter is what keeps that from becoming
+  // an infinite loop on a mail that always fails.
+  #deliveryAttempts = new Map();
 
   constructor({
     descriptor,
@@ -229,7 +254,11 @@ export class TextHarnessBridge {
       const decision = accessDecision ?? evaluateInboundAccess(this.#accessPolicy, {
         conversationType: kind,
         senderIds: [senderId, cleanText(normalized.senderAlternateId)].filter(Boolean),
-        text: normalized.content,
+        // The same control text the command runner below parses. A channel may
+        // decorate `content` for the model (email prepends the mail headers), and
+        // a decorated body never looks like a command — so reading `content` here
+        // recognized no command at all and skipped the command-permission gate.
+        text: controlTextOf(normalized),
         hasImages,
         hasFiles,
       });
@@ -282,7 +311,7 @@ export class TextHarnessBridge {
 
     const key = `${normalized.kind}:${normalized.conversationId}`;
     const pending = this.#pendingInteractions.get(key);
-    const text = cleanText(normalized.content);
+    const text = controlTextOf(normalized);
     const batchCommand = isBatchInputCommand(text);
     if (batchCommand && normalized.kind === 'group' && normalized.addressed === true) {
       return this.#finishLocalMessage(
@@ -362,7 +391,12 @@ export class TextHarnessBridge {
       key,
       actor: senderId,
       messageId,
-      text: hasInboundImages(normalized) || hasInboundFiles(normalized) ? '' : normalized.content,
+      // Approval decisions are parsed from the control text, exactly like the
+      // commands above: a decorated `content` hid "批准" behind the mail headers,
+      // so a plain-body approval never claimed its pending request.
+      text: hasInboundImages(normalized) || hasInboundFiles(normalized)
+        ? ''
+        : controlTextOf(normalized),
       addressed: normalized.kind !== 'group' || normalized.addressed === true,
       hasPendingQuestion: Boolean(pending),
       questionCompletion: pending?.submitting || pending?.claimedReplyMessageId
@@ -500,7 +534,7 @@ export class TextHarnessBridge {
     const target = message.replyTarget;
     try {
       const result = await runner(
-        cleanText(message.content),
+        controlTextOf(message),
         this.#harness,
         this.#state,
         key,
@@ -615,7 +649,7 @@ export class TextHarnessBridge {
     }
 
     const target = message.replyTarget;
-    const text = cleanText(message.content);
+    const text = controlTextOf(message);
     const batchSubmission = message.batchSubmission;
     let stream = null;
     let semanticStream = false;
@@ -877,6 +911,8 @@ export class TextHarnessBridge {
           clearLastMessageFailure(this.#status);
         }
       }
+      // The turn produced an answer, so its retry budget is spent and reset.
+      this.#deliveryAttempts.delete(messageId);
       return delivery.receipt;
     } catch (error) {
       stopKeepalive();
@@ -948,6 +984,10 @@ export class TextHarnessBridge {
           sendError,
         );
       }
+      // The turn produced no answer, so this id is "attempted", not "handled".
+      // Releasing the mark lets the next poll retry it; `alreadyRecorded` means
+      // an outer caller owns the mark, so it is left alone there.
+      if (!alreadyRecorded) await this.#releaseFailedDelivery(messageId);
       return error.deliveryReceipt;
     } finally {
       stopKeepalive();
@@ -955,6 +995,43 @@ export class TextHarnessBridge {
         this.#cancelPendingInteraction(conversationKey),
         this.#approvals.closeRoute(conversationKey),
       ]);
+    }
+  }
+
+  /**
+   * Release the `markSeen` of a turn that failed without delivering anything,
+   * so the next poll can pick the message up again.
+   *
+   * Bounded: a message is retried at most `MAX_DELIVERY_ATTEMPTS` times, after
+   * which the mark stays and the id becomes a tombstone. That keeps a mail that
+   * always fails from being re-executed forever, while a transient Harness
+   * outage no longer drops it permanently.
+   *
+   * Returns true when the message was released and will be retried.
+   */
+  async #releaseFailedDelivery(messageId) {
+    const attempts = (this.#deliveryAttempts.get(messageId) ?? 0) + 1;
+    if (attempts >= MAX_DELIVERY_ATTEMPTS) {
+      // Give up: keep the mark so the id is never replayed, and stop tracking
+      // it. The sender has already been told the turn failed.
+      this.#deliveryAttempts.delete(messageId);
+      this.#logger.warn?.(
+        `[dsh-im:${this.#descriptor.key}] giving up on a message after `
+        + `${attempts} failed delivery attempts; it will not be retried.`,
+      );
+      return false;
+    }
+    this.#deliveryAttempts.set(messageId, attempts);
+    if (typeof this.#state?.unmarkSeen !== 'function') return false;
+    try {
+      await this.#state.unmarkSeen(messageId);
+      return true;
+    } catch (error) {
+      this.#logger.warn?.(
+        `[dsh-im:${this.#descriptor.key}] unable to release a failed message for retry:`,
+        error,
+      );
+      return false;
     }
   }
 
@@ -1000,7 +1077,7 @@ export class TextHarnessBridge {
     }
 
     const target = message.replyTarget;
-    const text = cleanText(message.content);
+    const text = controlTextOf(message);
     if (!text || hasInboundImages(message) || hasInboundFiles(message)) {
       try {
         await this.#bot.sendText(target, t('请用文字回答当前问题。'));

@@ -147,9 +147,11 @@ if (client.includes('settings.plugins.tab') || clientSources.includes('settings.
 // template; the delivery target adds one ordinary checkbox template.
 const contextEditorSource = await readFile(resolve(root, 'plugin-src/client/context-enhancement.js'), 'utf8');
 const deliverySettingsSource = await readFile(resolve(root, 'plugin-src/client/delivery-settings.js'), 'utf8');
+const emailSettingsSource = await readFile(resolve(root, 'plugin-src/client/channels/email/index.js'), 'utf8');
 const otherClientSources = clientSources
   .replace(contextEditorSource, '')
-  .replace(deliverySettingsSource, '');
+  .replace(deliverySettingsSource, '')
+  .replace(emailSettingsSource, '');
 if (/role:\s*["']switch|type:\s*["']checkbox/.test(otherClientSources)
   || (deliverySettingsSource.match(/type:\s*["']checkbox["']/g) ?? []).length !== 1
   || /role:\s*["']switch["']/u.test(deliverySettingsSource)

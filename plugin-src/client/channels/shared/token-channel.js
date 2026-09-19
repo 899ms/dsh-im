@@ -82,7 +82,7 @@ export function createTokenChannelSettings(definition) {
     accountSettingsEndpoint = null,
   } = definition;
 
-  function AccountCard({ account, busy, testNotice, removing, onReconnect, onWorkspaceSave, onAliasSave, onModelSave, onAgentPresetSave, onContextEnhancementSave, onAccountSettingsSave, onRequestRemove, onConfirmRemove, onCancelRemove }) {
+  function AccountCard({ account, busy, testNotice, removing, onReconnect, onWorkspaceSave, onAliasSave, onModelSave, onAgentPresetSave, onContextEnhancementSave, onAccountSettingsSave, onRequestRemove, onConfirmRemove, onCancelRemove, rpcCall, reload }) {
     const state = busy === 'reconnect' ? 'connecting' : account.state;
     const tone = account.connected ? 'success' : state === 'error' ? 'error' : 'warning';
     const stateLabel = account.connected ? '运行正常' : state === 'connecting' ? '正在连接' : '连接未就绪';
@@ -144,6 +144,11 @@ export function createTokenChannelSettings(definition) {
           account,
           busy: Boolean(busy),
           onSave: onAccountSettingsSave,
+          // Channels with extra settings panels (email session binding) call
+          // their own endpoints through the same RPC bridge.
+          rpcCall,
+          endpoints,
+          onChanged: reload,
         }) : null,
         h('div', { className: 'ddt-accountFooter dim-cardFooter' },
           h('div', { className: 'dim-cardFooterLayout' },
@@ -331,6 +336,8 @@ export function createTokenChannelSettings(definition) {
           h('ul', { className: 'ddt-list dim-botList' }, model.bots.map((account) =>
             h('li', { key: account.botId }, h(AccountCard, {
               account,
+              rpcCall,
+              reload: loadStatus,
               busy: busyByBot[account.botId],
               testNotice: testNoticeByBot[account.botId],
               removing: removeTarget === account.botId,
@@ -433,6 +440,11 @@ export function createTokenChannelSettings(definition) {
                   error: credentialError,
                   onSubmit: bindCredentials,
                   onCancel: () => { setCredentialOpen(false); setCredentialError(null); },
+                  // A transport that authorizes out of band (the Agent mailbox
+                  // shows a QR code) drives its own endpoints through the bridge.
+                  rpcCall,
+                  endpoints,
+                  onAuthorized: bindCredentials,
                 })
               : h(CredentialBindingPanel, {
                   channel,
