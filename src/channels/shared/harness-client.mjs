@@ -562,7 +562,7 @@ export class HarnessReplyTracker {
     pushUpdate({ type: 'text', text });
   }
 
-  consumeAll(entries, { live = false } = {}) {
+  consumeAll(entries, { live = false, fromMux = false } = {}) {
     const updates = [];
     // 同一批轮询内的 text 帧只保留最新累积，其余事件逐帧透出，
     // 让消费方能按顺序看到每个工具调用与结果。
@@ -616,6 +616,21 @@ export class HarnessReplyTracker {
         }
         continue;
       }
+      // A turn/end delivered over the mux can outrun the history backfill of
+      // the durable events it trails (e.g. the final assistant message).
+      // Advancing the watermark to its seq would make `seq <= lastSeq` drop
+      // those pending events, losing the final answer. Only defer such a mux
+      // end across the gap; the authoritative, ordered history poll fills the
+      // hole and then redelivers the end. A history end is never deferred, so a
+      // failed turn with no trailing answer still finishes immediately.
+      if (fromMux
+        && event.type === 'turn/end'
+        && event.data?.turn === this.#targetTurn
+        && Number.isInteger(seq)
+        && seq > this.#lastSeq + 1) {
+        continue;
+      }
+
       if (lateReasoningChunk) {
         if (this.#transientSeqs.has(seq)) continue;
         this.#transientSeqs.add(seq);
@@ -1531,9 +1546,10 @@ export class HarnessClient {
     let lastProgressAt = Date.now();
     let lastPollSeq = tracker.lastSeq;
     let progressTail = Promise.resolve();
-    const consumeProgress = (entries) => {
+    const consumeProgress = (entries, { fromMux = false } = {}) => {
       const updates = tracker.consumeAll(entries, {
         live: progressMode === 'live',
+        fromMux,
       });
       const seqAdvanced = tracker.lastSeq > lastPollSeq;
       lastPollSeq = tracker.lastSeq;
@@ -1632,7 +1648,7 @@ export class HarnessClient {
           onInteraction,
           onResolved: onInteractionResolved,
           onSessionEvent: progressMode === 'live'
-            ? (event) => { consumeProgress([event]); }
+            ? (event) => { consumeProgress([event], { fromMux: true }); }
             : undefined,
           onOpen: markOpen,
           ownership,

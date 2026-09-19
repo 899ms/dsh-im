@@ -1518,3 +1518,75 @@ test('tracker surfaces live reasoning that streams before the turn binds', () =>
   ]);
   assert.equal(tracker.lastSeq, 4);
 });
+
+test('tracker recovers the final answer when a live turn/end outruns history after binding', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-gap', afterSeq: -1 });
+
+  // Bind the turn and stream one process message over the mux (seq 0..2).
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 0, data: { turn: 3 } },
+    { type: 'user/message', seq: 1, data: { turn: 3, source: { rpcId: 'rpc-gap' } } },
+    { type: 'assistant/message', seq: 2, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '先读取文件' }] },
+    } },
+  ], { live: true });
+  assert.equal(tracker.turn, 3);
+  assert.equal(tracker.answer, '先读取文件');
+
+  // Disconnect drops the final answer (seq 3); reconnect delivers turn/end
+  // (seq 4) over the mux first. It must not finish the turn or advance the
+  // cursor across the gap, or the pending final answer would be skipped.
+  tracker.consumeAll([
+    { type: 'turn/end', seq: 4, data: { turn: 3, reason: { kind: 'completed' } } },
+  ], { live: true, fromMux: true });
+  assert.equal(tracker.finished, false);
+  assert.equal(tracker.lastSeq, 2);
+
+  // History poll backfills the hole in order: final answer then the end.
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 0, data: { turn: 3 } },
+    { type: 'user/message', seq: 1, data: { turn: 3, source: { rpcId: 'rpc-gap' } } },
+    { type: 'assistant/message', seq: 2, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '先读取文件' }] },
+    } },
+    { type: 'assistant/message', seq: 3, data: {
+      turn: 3,
+      step: 1,
+      message: { content: [{ type: 'text', text: '最终答案' }] },
+    } },
+    { type: 'turn/end', seq: 4, data: { turn: 3, reason: { kind: 'completed' } } },
+  ], { live: true });
+
+  assert.equal(tracker.finished, true);
+  assert.deepEqual(tracker.reason, { kind: 'completed' });
+  assert.equal(tracker.lastSeq, 4);
+  assert.equal(tracker.answer, '先读取文件\n\n最终答案');
+});
+
+test('tracker (all mode) recovers the final answer in the same reconnect scenario', () => {
+  // Contrast baseline: in all mode the premature turn/end never arrives over a
+  // mux, so history backfill alone delivers everything in order.
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-gap-all', afterSeq: -1 });
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 0, data: { turn: 3 } },
+    { type: 'user/message', seq: 1, data: { turn: 3, source: { rpcId: 'rpc-gap-all' } } },
+    { type: 'assistant/message', seq: 2, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '先读取文件' }] },
+    } },
+    { type: 'assistant/message', seq: 3, data: {
+      turn: 3,
+      step: 1,
+      message: { content: [{ type: 'text', text: '最终答案' }] },
+    } },
+    { type: 'turn/end', seq: 4, data: { turn: 3, reason: { kind: 'completed' } } },
+  ]);
+
+  assert.equal(tracker.finished, true);
+  assert.equal(tracker.answer, '先读取文件\n\n最终答案');
+});
