@@ -1074,6 +1074,36 @@ test('QQ group messages append a stable tool failure notice without exposing pro
   assert.doesNotMatch(sent[0], /Error calling|Status code|404/);
 });
 
+test('QQ sends neutral completion replies and retains tool failure notices', async () => {
+  for (const toolFailed of [false, true]) {
+    const sent = [];
+    const status = createQqBridgeStatus();
+    status.lastError = 'previous failure';
+    status.lastMessageError = { code: 'MODEL_EMPTY_REPLY' };
+    const fixture = stateFixture([['c2c:owner-openid', 'session-empty-completed']]);
+    const bridge = new QqHarnessBridge({
+      bot: { sendText: async (_target, text) => sent.push(text) },
+      ownerUserOpenid: 'owner-openid',
+      status,
+      harness: {
+        sessionExists: async () => true,
+        ask: async (_session, _text, { onUpdate }) => {
+          if (toolFailed) await onUpdate({ type: 'status', toolName: 'bash', error: 'private detail' });
+          return '本轮处理已结束，没有文本回复。';
+        },
+      },
+      state: fixture.state,
+    });
+    await bridge.accept(message());
+    assert.deepEqual(sent, [toolFailed
+      ? '本轮处理已结束，没有文本回复。\n\n---\n\n工具调用「bash」未成功，请检查工具配置或稍后重试。'
+      : '本轮处理已结束，没有文本回复。']);
+    assert.equal(status.messagesReplied, 1);
+    assert.equal(status.lastError, null);
+    assert.equal(status.lastMessageError, null);
+  }
+});
+
 test('QQ delivers final group answers as markdown messages', async () => {
   const sentText = [];
   const markdownCalls = [];

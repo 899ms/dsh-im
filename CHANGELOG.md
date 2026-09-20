@@ -6,6 +6,11 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Fixed / 修复
+
+- 修复 WhatsApp 群聊中其他成员通过 LID 提及或引用回复机器人时没有响应的问题（[#221](https://github.com/xmanrui/dsh-im/issues/221)）。恢复 3.0.3 的账号别名识别，使用当前连接提供的手机号 ID 和 LID 识别提及、回复及自聊；继续遵守现有群聊访问权限。
+  Fixed WhatsApp group mentions and quoted replies from other members being ignored when they address the bot by LID ([#221](https://github.com/xmanrui/dsh-im/issues/221)). Restored the account-alias matching from 3.0.3, using the current connection's phone-number ID and LID for mentions, replies, and self-chat while preserving existing group access policies.
+
 ## [4.22.0] - 2026-09-19
 
 ### Added / 新增

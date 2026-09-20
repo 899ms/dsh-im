@@ -1306,6 +1306,33 @@ test('/stop uses the shared command fast lane without waiting for the running pr
   assert.equal(sent.at(-1), '原任务完成');
 });
 
+test('a neutral completion reply finishes the shared-channel stream and clears the prior failure', async () => {
+  const fixture = stateFixture({ 'direct:chat-a': 'session-empty-completed' });
+  const finished = [];
+  const sent = [];
+  const bridge = createBridge({
+    state: fixture.state,
+    bot: {
+      sendText: async (_target, text) => sent.push(text),
+      openStream: async () => ({
+        update() {},
+        async finish(text) { finished.push(text); },
+        cancel() { assert.fail('completed stream must not be cancelled'); },
+      }),
+    },
+    harness: {
+      sessionExists: async () => true,
+      ask: async () => '本轮处理已结束，没有文本回复。',
+    },
+  });
+  bridge.status.lastMessageError = { code: 'MODEL_EMPTY_REPLY' };
+  await bridge.accept(message('empty-completed-stream', '执行任务'));
+  assert.deepEqual(finished, ['本轮处理已结束，没有文本回复。']);
+  assert.deepEqual(sent, []);
+  assert.equal(bridge.status.messagesReplied, 1);
+  assert.equal(bridge.status.lastMessageError, null);
+});
+
 test('a stopped shared-channel turn closes an opened stream instead of leaving a processing placeholder', async () => {
   const fixture = stateFixture({ 'direct:chat-a': 'session-running' });
   const finished = [];
