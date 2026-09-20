@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 
 import { adoptRegisteredWorkspaceSession } from './harness-session-binding.mjs';
+import { sameWorkspacePath } from './default-workspace.mjs';
 import {
   appendInboundFilesToPrompt,
   InboundFileError,
@@ -824,7 +826,6 @@ function harnessTurnError(reason) {
     return new HarnessTurnError('turn-interrupted', { reason });
   }
   if (kind === 'aborted') return new HarnessTurnError('turn-aborted', { reason });
-  if (kind === 'completed') return new HarnessTurnError('model-empty-response', { reason });
   return new HarnessTurnError('harness-turn-failed', { reason });
 }
 
@@ -837,6 +838,7 @@ export class HarnessClient {
   #baseUrl;
   #apiProxy;
   #workspace;
+  #ungroupedWorkspace;
   #agentPreset;
   #autostart;
   #dshBin;
@@ -860,6 +862,7 @@ export class HarnessClient {
     apiProxy,
     interactionScope = apiProxy,
     workspace,
+    ungroupedWorkspace,
     agentPreset,
     autostart = false,
     dshBin = 'dsh',
@@ -908,6 +911,8 @@ export class HarnessClient {
       throw new TypeError('interactionScope must identify the current Host');
     }
     this.#workspace = workspace;
+    // Only the reserved IM directory bypasses grouping, even after /ws switches.
+    this.#ungroupedWorkspace = ungroupedWorkspace;
     // Keep an omitted preset absent so session.create resolves the Host's current default.
     this.#agentPreset = agentPreset ?? undefined;
     this.#autostart = Boolean(this.#baseUrl && autostart);
@@ -1041,6 +1046,38 @@ export class HarnessClient {
     await this.ensureRunning(options);
     const workspaceList = await this.rpc('workspace.list', {}, 30_000, options);
     const workspace = workspaceFromList(workspacePath, workspaceList);
+    if (await this.isUngroupedWorkspace(workspacePath)) {
+      const sessionList = await this.rpc('session.list', {}, 30_000, options);
+      if (!Array.isArray(sessionList?.items)) {
+        throw new Error('Harness returned an invalid response for session.list');
+      }
+      const registered = new Set();
+      const selected = new Set();
+      for (const item of workspaceList.items) {
+        if (!Array.isArray(item?.sessionIds)
+          || item.sessionIds.some((id) => typeof id !== 'string' || !id)) {
+          throw new Error('Harness returned invalid session IDs for workspace.list');
+        }
+        for (const id of item.sessionIds) registered.add(id);
+        if (await sameWorkspacePath(item.path, workspacePath)) {
+          for (const id of item.sessionIds) selected.add(id);
+        }
+      }
+      for (const item of sessionList.items) {
+        if (typeof item?.sessionId !== 'string' || !item.sessionId) {
+          throw new Error('Harness returned an invalid response for session.list');
+        }
+        // A matching cwd never overrides an explicit group assignment.
+        if (!registered.has(item.sessionId) && await this.isUngroupedWorkspace(item.cwd)) {
+          selected.add(item.sessionId);
+        }
+      }
+      return workspaceSessions(
+        { path: workspacePath, sessionIds: [...selected] },
+        workspaceList.archivedSessionIds,
+        sessionList,
+      );
+    }
     if (!workspace) return { workspace: workspacePath, sessions: [] };
     const sessionList = await this.rpc('session.list', {}, 30_000, options);
     return workspaceSessions(workspace, workspaceList.archivedSessionIds, sessionList);
@@ -1108,6 +1145,10 @@ export class HarnessClient {
     return adoptRegisteredWorkspaceSession(this, value, options);
   }
 
+  async isUngroupedWorkspace(workspace) {
+    return sameWorkspacePath(workspace, this.#ungroupedWorkspace);
+  }
+
   async workspaceId(options = {}) {
     const { workspace = this.#workspace, ...rpcOptions } = options;
     const { items } = await this.rpc('workspace.list', {}, 30_000, rpcOptions);
@@ -1119,9 +1160,13 @@ export class HarnessClient {
 
   async createSession(options = {}) {
     const { agentPreset: requestedPreset, ...rpcOptions } = options;
+    const workspace = rpcOptions.workspace ?? this.#workspace;
+    const ungrouped = await this.isUngroupedWorkspace(workspace);
+    if (ungrouped) await mkdir(workspace, { recursive: true });
     await this.ensureRunning(rpcOptions);
-    const workspaceId = await this.workspaceId(rpcOptions);
-    const payload = { workspaceId };
+    const payload = ungrouped
+      ? { cwd: workspace }
+      : { workspaceId: await this.workspaceId(rpcOptions) };
     const agentPreset = requestedPreset !== undefined ? requestedPreset : this.#agentPreset;
     if (agentPreset != null) payload.agentPreset = agentPreset;
     const created = await this.rpc('session.create', payload, 30_000, rpcOptions);
@@ -1603,6 +1648,7 @@ export class HarnessClient {
     let interactionTask = null;
     let artifactsDelivered = false;
     let deliveredArtifactCount = 0;
+    let artifactHandoffError = null;
     const stagedBatches = [];
     let promptAccepted = false;
     let turnFinished = false;
@@ -1618,6 +1664,7 @@ export class HarnessClient {
           await onArtifact(artifact);
           deliveredArtifactCount += 1;
         } catch (error) {
+          artifactHandoffError ??= error;
           outboundArtifactRegistry.release(artifact);
           console.warn('[dsh-im] ignored an artifact handoff failure:', this.#logPrefix, error.message);
         }
@@ -1753,6 +1800,12 @@ export class HarnessClient {
             }
             if (artifactCount > 0) return '';
             if (ownership?.stopRequested) throw turnStoppedError();
+            if (artifactHandoffError) throw artifactHandoffError;
+            // A completed turn can do all its work through tools without text.
+            // Missing end reasons retain the existing empty-reply failure.
+            if (tracker.reason != null && harnessTurnSucceeded(tracker.reason)) {
+              return t('本轮处理已结束，没有文本回复。');
+            }
             throw harnessTurnError(tracker.reason);
           }
 
@@ -1775,6 +1828,11 @@ export class HarnessClient {
           throw timeoutError;
         }
       } catch (error) {
+        if (error instanceof HarnessTurnError) {
+          error.details ??= {
+            sessionId, promptRpcId, baselineSeq, turn: tracker.turn, lastSeq: tracker.lastSeq,
+          };
+        }
         // Once cancellation was accepted, transport/poll failures and timeouts
         // describe the convergence of that stop, not an unrelated ask failure.
         if (!ownership?.stopRequested) throw error;

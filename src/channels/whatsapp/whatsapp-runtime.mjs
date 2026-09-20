@@ -4,6 +4,7 @@ import {
   areJidsSameUser,
   downloadMediaMessage,
   jidDecode,
+  jidNormalizedUser,
   normalizeMessageContent,
 } from '@whiskeysockets/baileys';
 
@@ -14,6 +15,7 @@ import { trackOutboundArtifactProviderPromise } from '../shared/semantic/artifac
 import { createWhatsappBridgeStatus, WhatsappHarnessBridge } from './whatsapp-bridge.mjs';
 import {
   WHATSAPP_ACCESS_MODES,
+  normalizeWhatsappAccountJid,
 } from './config-store.mjs';
 import { createWhatsappWebSession } from './whatsapp-web-session.mjs';
 
@@ -289,8 +291,22 @@ export function createWhatsappMediaDownloader({
   });
 }
 
+function whatsappAccountMatcher(accountJid, aliases) {
+  // PN and LID are separate identities unless the linked account supplies both.
+  const accountJids = new Set(
+    [accountJid, ...(Array.isArray(aliases) ? aliases : [])]
+      .map((jid) => normalizeWhatsappAccountJid(jidNormalizedUser(jid)))
+      .filter(Boolean),
+  );
+  return (jid) => {
+    const normalized = normalizeWhatsappAccountJid(jidNormalizedUser(jid));
+    return normalized !== null && accountJids.has(normalized);
+  };
+}
+
 export function normalizeWhatsappMessage(message, accountJid, {
   download = downloadMediaMessage,
+  accountAliases = [],
 } = {}) {
   const remoteJid = typeof message?.key?.remoteJid === 'string' ? message.key.remoteJid : '';
   const alternateRemoteJid = typeof message?.key?.remoteJidAlt === 'string'
@@ -300,8 +316,9 @@ export function normalizeWhatsappMessage(message, accountJid, {
     || remoteJid.endsWith('@newsletter')) return null;
   const group = remoteJid.endsWith('@g.us');
   const fromMe = message.key.fromMe === true;
+  const matchesAccount = whatsappAccountMatcher(accountJid, accountAliases);
   const selfChat = fromMe && !group
-    && [remoteJid, alternateRemoteJid].some((jid) => jid && areJidsSameUser(jid, accountJid));
+    && [remoteJid, alternateRemoteJid].some(matchesAccount);
   if (fromMe && !selfChat && !group) return null;
   const senderJid = fromMe ? accountJid : group ? message.key.participant : remoteJid;
   const senderAlternateJid = group && !fromMe ? message.key.participantAlt : alternateRemoteJid;
@@ -310,9 +327,9 @@ export function normalizeWhatsappMessage(message, accountJid, {
   const content = normalizeMessageContent(message.message);
   const context = messageContext(content);
   const mentioned = Array.isArray(context?.mentionedJid)
-    && context.mentionedJid.some((jid) => areJidsSameUser(jid, accountJid));
+    && context.mentionedJid.some(matchesAccount);
   const replyToSelf = typeof context?.participant === 'string'
-    && areJidsSameUser(context.participant, accountJid);
+    && matchesAccount(context.participant);
   const image = whatsappImageSource(message, content, download, { viewOnce });
   const file = whatsappFileSource(message, content, download);
   const replyTo = whatsappReplyReference(context);
@@ -757,7 +774,13 @@ export class WhatsappRuntime {
           { code: 'relink-required' },
         )),
         onMessage: async (raw, context) => {
+          const linkedAccount = context?.socket?.user;
           const message = normalizeWhatsappMessage(raw, this.#config.accountJid, {
+            accountAliases: [
+              linkedAccount?.id,
+              linkedAccount?.lid,
+              linkedAccount?.phoneNumber,
+            ],
             download: createWhatsappMediaDownloader({
               socket: context?.socket,
               logger: this.#logger,

@@ -1,6 +1,6 @@
 {
   "name": "@xmanrui/dsh-im",
-  "version": "4.21.2",
+  "version": "4.22.0",
   "description": "把十一种 IM 渠道和公网 AI Office 接入本机 DeepSeek Harness。 Connect eleven IM channels and a public AI Office to a local DeepSeek Harness.",
   "keywords": [
     "deepseek-harness",
@@ -114,6 +114,7 @@
     "src",
     "PROACTIVE_DELIVERY.md",
     "PROACTIVE_DELIVERY.en.md",
+    "docs/client-integration.md",
     "LICENSE",
     "README.md",
     "README.en.md",
@@ -160,6 +161,9 @@
     "@tencent-connect/qqbot-nodejs": "1.0.4",
     "@wecom/aibot-node-sdk": "1.0.7",
     "dingtalk-stream": "2.1.4",
+    "imapflow": "^2.0.5",
+    "mailparser": "^3.9.28",
+    "nodemailer": "^10.0.10",
     "qrcode": "1.5.4",
     "undici": "7.29.0"
   },
@@ -178,5 +182,8 @@
     "doc": "docs",
     "lib": "lib",
     "test": "test"
+  },
+  "optionalDependencies": {
+    "@tencent-qqmail/agently-cli": "^1.0.18"
   }
 }

@@ -14,6 +14,7 @@ import {
   WeixinLogoGlyph,
   WhatsappLogoGlyph,
   IMessageLogoGlyph,
+  EmailLogoGlyph,
 } from './channel-logos.js';
 import { DINGTALK_RPC_CHANNEL } from './channels/dingtalk/api.js';
 import { DingtalkSettingsTab } from './channels/dingtalk/index.js';
@@ -48,8 +49,11 @@ import { WHATSAPP_RPC_CHANNEL } from './channels/whatsapp/api.js';
 import { WhatsappSettingsTab } from './channels/whatsapp/index.js';
 import { installWhatsappStyles } from './channels/whatsapp/styles.js';
 import { IMESSAGE_RPC_CHANNEL } from './channels/imessage/api.js';
+import { EMAIL_RPC_CHANNEL } from './channels/email/api.js';
 import { IMessageSettingsTab } from './channels/imessage/index.js';
+import { EmailSettingsTab, useEmailChannelEnabled } from './channels/email/index.js';
 import { installIMessageStyles } from './channels/imessage/styles.js';
+import { installEmailStyles } from './channels/email/styles.js';
 import { en, h, IM_LOCALE_NAMESPACE, setImTranslator, zh } from './i18n.js';
 import {
   HOST_LANGUAGE_RPC_CHANNEL,
@@ -74,6 +78,7 @@ import { installImStyles } from './styles.js';
 import { installSessionChannelLogos } from './session-channel-logos.js';
 import { UpdatePanel, UPDATE_RPC_CHANNEL } from './update-panel.js';
 import { WorkspaceDirectoryPickerContext } from './workspace-editor.js';
+import { IMPanelErrorBoundary } from './panel-error-boundary.js';
 
 export const name = 'im-settings';
 export const inject = ['slots', 'connection', 'locale', 'workspaces'];
@@ -101,6 +106,7 @@ const CHANNELS = Object.freeze([
   { id: 'whatsapp', label: 'WhatsApp' },
   { id: 'wecomApp', label: '企业微信应用', note: '（实验功能）' },
   { id: 'imessage', label: 'iMessage', note: '（实验功能）' },
+  { id: 'email', label: '邮箱', note: '（实验功能）' },
   { id: 'office', label: 'AI Office', note: '（实验功能）' },
 ]);
 
@@ -156,6 +162,11 @@ function IMessageLogo() {
     h(IMessageLogoGlyph));
 }
 
+function EmailLogo() {
+  return h('span', { className: 'dim-logo dim-logoEmail', 'aria-hidden': 'true' },
+    h(EmailLogoGlyph));
+}
+
 function OfficeLogo() {
   return h('span', { className: 'dim-logo dim-logoOffice', 'aria-hidden': 'true' },
     h(OfficeLogoGlyph));
@@ -173,6 +184,7 @@ function ChannelLogo({ channel }) {
   if (channel === 'discord') return h(DiscordLogo);
   if (channel === 'whatsapp') return h(WhatsappLogo);
   if (channel === 'imessage') return h(IMessageLogo);
+  if (channel === 'email') return h(EmailLogo);
   return h(OfficeLogo);
 }
 
@@ -197,6 +209,7 @@ export function IMSettingsTab({
   discordRpcCall,
   feishuRpcCall,
   imessageRpcCall,
+  emailRpcCall,
   qqRpcCall,
   slackRpcCall,
   telegramRpcCall,
@@ -209,17 +222,30 @@ export function IMSettingsTab({
   deliveryRpcCall,
   globalSettingsRpcCall,
   workspaceDirectoryPicker,
+  preferredSectionId,
   browserLocation = globalThis.location,
   navigateToRecoveryUrl = replacePageLocation,
 }) {
-  const [selected, setSelected] = React.useState('weixin');
+  const [selected, setSelected] = React.useState(() => (
+    preferredSectionId === GLOBAL_SETTINGS_TAB_ID
+      || CHANNELS.some((channel) => channel.id === preferredSectionId)
+      ? preferredSectionId : 'weixin'
+  ));
   const [loopbackRecovery, setLoopbackRecovery] = React.useState(null);
   const [runningVersion, setRunningVersion] = React.useState(IM_PLUGIN_VERSION);
   const [deliverySettings, setDeliverySettings] = React.useState(null);
+  // The Host owns email availability and reports it over RPC. The
+  // mailbox entry point is omitted entirely while it is closed, and the visible
+  // channel list is what every later lookup (active tab, rail) reads from.
+  const emailEnabled = useEmailChannelEnabled(emailRpcCall);
+  const visibleChannels = React.useMemo(
+    () => CHANNELS.filter((channel) => channel.id !== 'email' || emailEnabled),
+    [emailEnabled],
+  );
   const githubTooltipId = React.useId();
   const generalSettingsTooltipId = React.useId();
   const globalSettingsSelected = selected === GLOBAL_SETTINGS_TAB_ID;
-  const active = CHANNELS.find((channel) => channel.id === selected) ?? CHANNELS[0];
+  const active = visibleChannels.find((channel) => channel.id === selected) ?? visibleChannels[0];
   const activeTabId = globalSettingsSelected
     ? 'dim-general-settings-trigger'
     : `dim-tab-${active.id}`;
@@ -248,6 +274,7 @@ export function IMSettingsTab({
     deliveryRpcCall,
     globalSettingsRpcCall,
     imessageRpcCall,
+    emailRpcCall,
   }, {
     location: browserLocation,
     onRecovery: reportLoopbackRecovery,
@@ -259,6 +286,7 @@ export function IMSettingsTab({
     feishuRpcCall,
     globalSettingsRpcCall,
     imessageRpcCall,
+    emailRpcCall,
     officeRpcCall,
     qqRpcCall,
     reportLoopbackRecovery,
@@ -325,7 +353,7 @@ export function IMSettingsTab({
     ),
     h('div', { className: 'dim-layout' },
       h('nav', { className: 'dim-rail', role: 'tablist', 'aria-label': 'IM 设置导航' },
-        CHANNELS.map((channel) => h('button', {
+        visibleChannels.map((channel) => h('button', {
           key: channel.id,
           type: 'button',
           role: 'tab',
@@ -389,6 +417,8 @@ export function IMSettingsTab({
                           ? h(WhatsappSettingsTab, { rpcCall: rpcCalls.whatsappRpcCall })
                           : active.id === 'imessage'
                             ? h(IMessageSettingsTab, { rpcCall: rpcCalls.imessageRpcCall })
+                          : active.id === 'email'
+                            ? h(EmailSettingsTab, { rpcCall: rpcCalls.emailRpcCall })
                           : h(OfficeSettingsTab, { rpcCall: rpcCalls.officeRpcCall }))),
     ),
   ));
@@ -427,6 +457,7 @@ export function apply(ctx) {
       installDiscordStyles(),
       installWhatsappStyles(),
       installIMessageStyles(),
+      installEmailStyles(),
       installOfficeStyles(),
       installImStyles(),
     ];
@@ -455,6 +486,8 @@ export function apply(ctx) {
     callManagementRpc(ctx.connection, WHATSAPP_RPC_CHANNEL, endpoint, payload, signal);
   const imessageRpcCall = (endpoint, payload, signal) =>
     callManagementRpc(ctx.connection, IMESSAGE_RPC_CHANNEL, endpoint, payload, signal);
+  const emailRpcCall = (endpoint, payload, signal) =>
+    callManagementRpc(ctx.connection, EMAIL_RPC_CHANNEL, endpoint, payload, signal);
   const slackRpcCall = (endpoint, payload, signal) =>
     callManagementRpc(ctx.connection, SLACK_RPC_CHANNEL, endpoint, payload, signal);
   const officeRpcCall = (endpoint, payload, signal) =>
@@ -471,29 +504,90 @@ export function apply(ctx) {
     pickDirectory: () => callWorkspaceDirectoryApi(ctx, 'pickDirectory'),
   });
 
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'xmanrui-dsh-im',
-    order: 21,
-    label: () => t('IM机器人'),
-    locale: IM_LOCALE_NAMESPACE,
-    inject: () => ({
-      dingtalkRpcCall,
-      discordRpcCall,
-      feishuRpcCall,
-      qqRpcCall,
-      slackRpcCall,
-      telegramRpcCall,
-      wecomRpcCall,
-      wecomAppRpcCall,
-      weixinRpcCall,
-      whatsappRpcCall,
-      imessageRpcCall,
-      officeRpcCall,
-      updateRpcCall,
-      deliveryRpcCall,
-      globalSettingsRpcCall,
-      workspaceDirectoryPicker,
-    }),
-  }, IMSettingsTab));
+  const panelDependencies = {
+    dingtalkRpcCall,
+    discordRpcCall,
+    feishuRpcCall,
+    qqRpcCall,
+    slackRpcCall,
+    telegramRpcCall,
+    wecomRpcCall,
+    wecomAppRpcCall,
+    weixinRpcCall,
+    whatsappRpcCall,
+    imessageRpcCall,
+    officeRpcCall,
+    emailRpcCall,
+    updateRpcCall,
+    deliveryRpcCall,
+    globalSettingsRpcCall,
+    workspaceDirectoryPicker,
+  };
+  const subscribeLocale = (listener) => typeof ctx.on === 'function'
+    ? ctx.on('locale/change', listener) : () => {};
+  const localeSnapshot = () => ctx.locale.getLocale?.()?.active ?? '';
+
+  // Stable for this plugin lifetime: creating an element must not create a
+  // new component type and reset the reader's selected tab or unsaved input.
+  function IMPanel({ preferredSectionId }) {
+    React.useSyncExternalStore(subscribeLocale, localeSnapshot, localeSnapshot);
+    return h(IMPanelErrorBoundary, null,
+      h(IMSettingsTab, { ...panelDependencies, preferredSectionId }));
+  }
+  const buildPanelElement = (props = {}) => h(IMPanel, {
+    preferredSectionId: props.preferredSectionId,
+  });
+
+  ctx.effect(() => {
+    let disposed = false;
+    let stopSettings = null;
+    let registered = false;
+    const setSettingsVisible = (visible) => {
+      if (disposed) return;
+      if (typeof visible !== 'boolean') throw new TypeError('visible must be a boolean');
+      if (visible === (stopSettings !== null)) return;
+      if (!visible) {
+        const stop = stopSettings;
+        stopSettings = null;
+        stop();
+        return;
+      }
+      // The existing slot controller owns late declarations, withdrawal and
+      // re-declaration. Cancelling it also cancels a pending registration.
+      stopSettings = ctx.slots.inject('settings.section', () => {
+        const unregister = ctx.slots.register({
+          name: 'settings.section',
+          id: 'xmanrui-dsh-im',
+          order: 21,
+          label: () => t('IM机器人'),
+          locale: IM_LOCALE_NAMESPACE,
+          inject: () => panelDependencies,
+        }, buildPanelElement);
+        registered = true;
+        return () => {
+          registered = false;
+          unregister();
+        };
+      });
+    };
+
+    // Publish only after the default registration is established, so a
+    // consumer hiding it during service discovery cannot be overridden.
+    setSettingsVisible(true);
+    if (typeof ctx.provide === 'function') {
+      ctx.provide('dshImClient', Object.freeze({
+        version: 1,
+        render: (props) => disposed ? null : buildPanelElement(props),
+        setSettingsVisible,
+        settingsVisible: () => !disposed && registered,
+      }));
+    }
+    return () => {
+      disposed = true;
+      const stop = stopSettings;
+      stopSettings = null;
+      registered = false;
+      stop?.();
+    };
+  }, 'im-settings: client panel service');
 }
