@@ -6,15 +6,30 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.24.0] - 2026-09-21
+
 ### Added / 新增
 
-- 飞书任务过程展示新增「实时直播」，使用飞书原生思考过程消息实时呈现推理、工具调用、参数和结果，最终答案仍以普通富文本消息单独发送。实时事件通过 Harness mux 传递并与历史记录去重，过程写入采用非阻塞批处理；原生过程不可用时不影响最终答案投递。
-  Feishu task progress gains a Live process mode backed by native thinking-process messages, streaming reasoning, tool calls, arguments, and results while keeping the final answer in a separate rich-text message. Native process failures do not suppress the final answer. Thanks to [@ShawnKung](https://github.com/ShawnKung) ([#224](https://github.com/xmanrui/dsh-im/pull/224)).
+- 飞书任务过程展示新增「实时直播」，使用原生思考过程消息展示当前任务的推理片段、工具调用、参数及结果，最终答案仍以普通富文本消息单独发送。推理通过实时连接补充，工具进度和最终结果沿用历史轮询；过程写入采用非阻塞批处理，原生过程不可用时不影响最终答案。已有机器人不自动切换展示模式。感谢 [@ShawnKung](https://github.com/ShawnKung)（[#224](https://github.com/xmanrui/dsh-im/pull/224)）。
+  Added Feishu Live process mode, using native thinking-process messages for the current task's reasoning snippets, tool calls, arguments, and results while delivering the final answer separately as rich text. Live connections supplement reasoning; history polling remains authoritative for tool progress and final results. Process writes use non-blocking batches, and process failures do not suppress the answer. Existing bots keep their selected presentation mode. Thanks to [@ShawnKung](https://github.com/ShawnKung) ([#224](https://github.com/xmanrui/dsh-im/pull/224)).
+- Telegram 新增每机器人独立的「会话行为 → 思考过程留痕」开关，将推理摘要和工具调用摘要作为独立的 💭／🔧 消息保留，最终答案另发。默认开启（含未设置该字段的已有机器人），显式关闭后恢复原有回复方式；中间留痕发送失败不阻止最终答案，长任务继续显示输入状态。留痕可能包含工具参数摘要，请按聊天受众选择是否开启。感谢 [@gin-melodic](https://github.com/gin-melodic)（[#203](https://github.com/xmanrui/dsh-im/pull/203)、[#235](https://github.com/xmanrui/dsh-im/pull/235)）。
+  Added a per-bot Telegram Thinking traces toggle under Conversation behavior. Reasoning and tool-call summaries remain as separate 💭/🔧 messages, followed by the final answer. It defaults on, including existing bots without the field; explicitly disabling it restores the previous reply presentation. Trace-send failures do not prevent the final answer, and long-running tasks keep the typing indicator. Traces can include tool-argument summaries, so choose the setting for the chat's audience. Thanks to [@gin-melodic](https://github.com/gin-melodic) ([#203](https://github.com/xmanrui/dsh-im/pull/203), [#235](https://github.com/xmanrui/dsh-im/pull/235)).
 
 ### Fixed / 修复
 
-- 实时直播改由现有历史轮询处理工具事件、最终答案和任务结束，避免断线重连后的较新事件使补回的答案被跳过。提前到达的推理片段在确认当前请求所属回合后才展示，并限制暂存大小，避免排队请求串入上一轮推理。
-  Live process mode now uses existing history polling for tool events, final answers, and completion so newer mux events cannot skip answers recovered after a reconnect. Early reasoning is buffered within fixed bounds and displayed only after its turn is correlated with the current request, excluding reasoning from other queued turns.
+- 飞书直播以历史记录恢复最终答案和任务结束，避免断线重连后的较新实时事件跳过尚未补回的回复。提前到达的推理采用有界暂存，确认请求与回合归属后才展示；同时处理排序、去重及结束后的迟到片段，避免排队请求混入上一轮推理。最终答复使用最后一步定稿内容，长工具参数和结果按协议限制截断。
+  Feishu live replies recover final answers and completion from history so newer events after a reconnect cannot skip missing replies. Early reasoning is buffered within fixed limits and displayed only after request/turn correlation, with ordering, deduplication, and late-frame handling that keep queued requests separate. Final replies use the last step's canonical text, and long tool arguments/results are bounded for the protocol.
+- Telegram 留痕模式的最终答案保留 Markdown、代码块及原有空行，不再按空段落预先拆分；纯文本重试保留原文，只重发明确失败的未发送部分，投递结果不确定时不自动重发。
+  Telegram thinking-mode final answers preserve Markdown, fenced code, and original blank lines without pre-splitting on empty paragraphs. Plain-text retries preserve content and resend only the definitively failed unsent tail; uncertain delivery is not automatically retried.
+- 修复邮件模型输入丢失主题等邮件头、腾讯 Agent 邮箱附件下载返回加载函数而非内容的问题；初始化收信游标只读取邮件列表摘要，不提前下载可能不在白名单内的正文。保留纯正文命令解析和现有延迟图片处理。感谢 [@C3H3-AI](https://github.com/C3H3-AI)（[#233](https://github.com/xmanrui/dsh-im/pull/233)）。
+  Fixed email model input losing subject/header context and Agent Mail attachment loaders returning functions instead of bytes. Initial receive cursors now use list summaries without fetching potentially disallowed message bodies. Plain-body command parsing and deferred image handling are preserved. Thanks to [@C3H3-AI](https://github.com/C3H3-AI) ([#233](https://github.com/xmanrui/dsh-im/pull/233)).
+- 补齐飞书原生斜杠命令面板中的工作区、会话绑定、模型、推理等级、预设、停止、补充指令、批量输入、版本及修复等现有命令入口，同步命令文档与测试。
+  Completed Feishu's native slash-command panel entries for existing workspace, Session binding, model, reasoning effort, preset, stop, steer, batch-input, version, and repair commands, with updated documentation and tests.
+
+### Changed / 变更
+
+- 设置页 GitHub 入口改用 Logo，保留链接及无障碍标签；补充飞书直播、Telegram 留痕及邮件回归测试和验证记录。移除带固定本机路径和聊天目标的 Telegram 实测脚本，并将 npm 包内的脚本收紧为明确的验证脚本清单。
+  Replaced the settings-page GitHub text button with a logo while preserving its link and accessible label, and expanded Feishu live-process, Telegram trace, and email regression coverage and verification records. Removed the machine-specific Telegram live-test script and restricted packaged scripts to an explicit verification-script allowlist.
 
 ## [4.23.0] - 2026-09-20
 
@@ -1156,7 +1171,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.23.0...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.24.0...HEAD
+[4.24.0]: https://github.com/xmanrui/dsh-im/compare/v4.23.0...v4.24.0
 [4.23.0]: https://github.com/xmanrui/dsh-im/compare/v4.22.0...v4.23.0
 [4.22.0]: https://github.com/xmanrui/dsh-im/compare/v4.21.2...v4.22.0
 [4.21.2]: https://github.com/xmanrui/dsh-im/compare/v4.21.1...v4.21.2
