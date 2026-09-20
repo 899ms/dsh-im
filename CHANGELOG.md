@@ -6,6 +6,11 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Fixed / 修复
+
+- 飞书话题首文在同一 AI 会话成功使用后不再重复注入；命令、拒绝消息及读取或请求失败不提前消耗首文，`/new`、会话切换或失效重建后重新附带。普通群聊和私聊的主动引用保持原有行为。感谢 [@yangzhe1991](https://github.com/yangzhe1991) 提出并实现首文去重（[#222](https://github.com/xmanrui/dsh-im/pull/222)）。
+  Feishu topic roots are no longer injected repeatedly after a successful turn in the same AI session. Commands, rejected messages, and failed lookups or requests do not consume the root; new, switched, or rebuilt sessions receive it again. Explicit quotes in ordinary groups and direct chats retain their existing behavior. Thanks to [@yangzhe1991](https://github.com/yangzhe1991) for proposing and implementing topic-root deduplication ([#222](https://github.com/xmanrui/dsh-im/pull/222)).
+
 ## [4.24.0] - 2026-09-21
 
 ### Added / 新增

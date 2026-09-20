@@ -521,134 +521,15 @@ test('Feishu does not treat the current thread root as its own reply reference',
   assert.equal('replyTo' in message, false);
 });
 
-test('Feishu expands a topic anchor message only once per topic', async () => {
-  const calls = [];
-  const client = { im: { v1: { message: { get: async (request) => {
-    calls.push(request);
-    return {
-      code: 0,
-      data: {
-        items: [{
-          message_id: 'om_anchor',
-          chat_id: 'oc_anchor_once',
-          msg_type: 'text',
-          sender: { id: 'ou_bot', sender_name: '报告机器人' },
-          body: { content: JSON.stringify({ text: '话题首文：很长的报告' }) },
-        }],
-      },
-    };
-  } } } } };
-  // 话题内每条用户消息的 parent_id === root_id === 话题首条。
-  const topicEvent = (messageId) => ({
-    message: {
-      message_id: messageId,
-      parent_id: 'om_anchor',
-      root_id: 'om_anchor',
-      thread_id: 'omt_anchor_once',
-      chat_id: 'oc_anchor_once',
-      message_type: 'text',
-      content: JSON.stringify({ text: '继续' }),
-    },
-  });
-
-  // 1️⃣ 话题第一条：锚点照旧展开（该话题的会话此时是新建的）。
-  const first = extractInboundMessage(topicEvent('om_first'), client);
-  assert.equal(first.replyTo.messageId, 'om_anchor');
-  // 5️⃣ bridge 会对同一条消息解析两次（#accept 判准入、#handle 跑回合），
-  // 两次都必须拿到锚点，否则真正构造 prompt 的那次反而丢了引用。
-  const firstAgain = extractInboundMessage(topicEvent('om_first'), client);
-  assert.equal(firstAgain.replyTo.messageId, 'om_anchor');
-  assert.deepEqual(await firstAgain.replyTo.load(), {
-    messageId: 'om_anchor',
-    authorId: 'ou_bot',
-    authorName: '报告机器人',
-    content: '话题首文：很长的报告',
-    attachments: [],
-  });
-
-  // 2️⃣ 同话题第二条起：锚点已在上下文里，不再重复注入。
-  assert.equal('replyTo' in extractInboundMessage(topicEvent('om_second'), client), false);
-  assert.equal('replyTo' in extractInboundMessage(topicEvent('om_third'), client), false);
-  // 展开只发生一次，后续消息连一次消息查询都不发。
-  assert.equal(calls.length, 1);
-});
-
-test('Feishu keeps expanding explicit quotes and other conversations inside a topic', async () => {
-  const client = { im: { v1: { message: { get: async (request) => {
-    return {
-      code: 0,
-      data: {
-        items: [{
-          message_id: request.path.message_id,
-          chat_id: 'oc_anchor_explicit',
-          msg_type: 'text',
-          body: { content: JSON.stringify({ text: `被引用的 ${request.path.message_id}` }) },
-        }],
-      },
-    };
-  } } } } };
-  const replyToId = (event) => extractInboundMessage(event, client).replyTo?.messageId ?? null;
-
-  // 3️⃣ 用户主动引用某条具体消息（parent_id !== root_id）：不受话题去重影响。
-  const quoted = {
-    message_id: 'om_quoted_1',
-    parent_id: 'om_bot_answer',
-    root_id: 'om_anchor',
-    thread_id: 'omt_anchor_explicit',
-    chat_id: 'oc_anchor_explicit',
-    message_type: 'text',
-    content: JSON.stringify({ text: '这条什么意思？' }),
-  };
-  assert.equal(replyToId({ message: quoted }), 'om_bot_answer');
-  assert.equal(replyToId({ message: { ...quoted, message_id: 'om_quoted_2' } }), 'om_bot_answer');
-
-  // 4️⃣ 非话题群的长按回复（无 thread_id）与私聊回复：完全照旧展开。
-  assert.equal(replyToId({
-    message: {
-      message_id: 'om_group_1',
-      parent_id: 'om_group_parent',
-      chat_id: 'oc_anchor_group',
-      message_type: 'text',
-      content: JSON.stringify({ text: '长按回复' }),
-    },
-  }), 'om_group_parent');
-  assert.equal(replyToId({
-    message: {
-      message_id: 'om_p2p_1',
-      parent_id: 'om_p2p_parent',
-      chat_id: 'oc_anchor_p2p',
-      chat_type: 'p2p',
-      message_type: 'text',
-      content: JSON.stringify({ text: '私聊回复' }),
-    },
-  }), 'om_p2p_parent');
-
-  // 同一个 chat 的另一个话题独立计数：新话题的第一条仍然展开。
-  const otherTopic = (messageId) => ({ message: {
-    message_id: messageId,
-    parent_id: 'om_anchor_2',
-    root_id: 'om_anchor_2',
-    thread_id: 'omt_anchor_other',
-    chat_id: 'oc_anchor_explicit',
-    message_type: 'text',
-    content: JSON.stringify({ text: '另一个话题' }),
+test('Feishu topic parsing is stateless across admission, handling and later messages', () => {
+  const event = (id) => ({ message: {
+    message_id: id, chat_type: 'group', chat_id: 'oc_topic',
+    thread_id: 'omt_topic', root_id: 'om_root', parent_id: 'om_root',
+    message_type: 'text', content: JSON.stringify({ text: 'continue' }),
   } });
-  assert.equal(replyToId(otherTopic('om_other_1')), 'om_anchor_2');
-  assert.equal(replyToId(otherTopic('om_other_2')), null);
-
-  // 没有 message id 就无法幂等判断：宁可不省，也不误伤锚点，且不占用话题额度。
-  const noMessageId = (messageId) => ({ message: {
-    ...(messageId ? { message_id: messageId } : {}),
-    parent_id: 'om_anchor_3',
-    root_id: 'om_anchor_3',
-    thread_id: 'omt_anchor_no_id',
-    chat_id: 'oc_anchor_explicit',
-    message_type: 'text',
-    content: JSON.stringify({ text: '缺少 message id' }),
-  } });
-  assert.equal(replyToId(noMessageId(null)), 'om_anchor_3');
-  assert.equal(replyToId(noMessageId('om_no_id_first')), 'om_anchor_3');
-  assert.equal(replyToId(noMessageId('om_no_id_second')), null);
+  for (const id of ['om_first', 'om_first', 'om_second']) {
+    assert.equal(extractInboundMessage(event(id), {}).replyTo.messageId, 'om_root');
+  }
 });
 
 test('extractInboundMessage exposes a native Feishu file as a lazy unbounded resource download', async () => {

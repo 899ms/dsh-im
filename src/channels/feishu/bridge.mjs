@@ -124,6 +124,7 @@ const RESOLVED_REPLY_TTL_MS = 30 * 60_000;
 const ROOT_CANDIDATE_TTL_MS = 30 * 60_000;
 /** Bound main-feed roots awaiting a topic so silent drops cannot grow them. */
 const MAX_ROOT_CANDIDATES = 512;
+const MAX_TOPIC_ANCHORS = 4_000;
 
 const MENU_COMMAND = /^\/m(?:enu)?$/i;
 const REPAIR_COMMAND_PREFIX = /^\/repair(?:\s|$)/i;
@@ -624,6 +625,8 @@ export class FeishuHarnessBridge {
   #anchorTopicReply = new Map();
   /** Main-feed roots this bot intends to auto-open as topics, awaiting thread_id. */
   #rootCandidates = new Map();
+  /** Last successfully injected topic root per conversation and AI session. */
+  #topicAnchors = new Map();
   #repair;
   #repairAttempt = null;
   #repairMonitorVersion = 0;
@@ -4875,6 +4878,72 @@ export class FeishuHarnessBridge {
     };
   }
 
+  async #preparePrompt(event, key, message) {
+    const snapshot = this.#acceptedMessageIds.get(event.message.message_id);
+    const build = async (input) => {
+      const rich = hasInboundImages(input) || hasReplyReference(input);
+      const original = rich
+        ? await promptContentForInboundMessage(input, { signal: this.#signal, deferImages: true })
+        : input.content;
+      const enhanced = enhanceContextContent(original, snapshot, () => ({
+        channel: 'feishu',
+        senderId: senderOpenId(event),
+        chatId: event.message.chat_id,
+        threadId: event.message.thread_id,
+      }));
+      return {
+        content: rich || enhanced !== original ? enhanced : undefined,
+        contextEnhanced: enhanced !== original,
+        sourceGuidance: snapshot?.config?.guidance,
+      };
+    };
+    const rootId = nonEmptyString(event.message.root_id);
+    const topicAnchor = event.message.chat_type === 'group'
+      && nonEmptyString(event.message.thread_id)
+      && rootId && message.replyTo?.messageId === rootId
+      // A reference-only message must not become an empty prompt.
+      && (nonEmptyString(message.content) || hasInboundImages(message) || hasInboundFiles(message));
+    if (!topicAnchor) return build(message);
+
+    const withoutAnchor = { ...message };
+    delete withoutAnchor.replyTo;
+    const base = await build(withoutAnchor);
+    let preparedSessionId;
+    let anchorLoaded = false;
+    return {
+      ...base,
+      prepareContent: async ({ sessionId }) => {
+        preparedSessionId = sessionId;
+        anchorLoaded = false;
+        const previous = this.#topicAnchors.get(key);
+        if (previous?.sessionId === sessionId && previous.rootMessageId === rootId) {
+          return base.content ?? message.content;
+        }
+        const prepared = await build({
+          ...message,
+          replyTo: {
+            ...message.replyTo,
+            load: async (options) => {
+              const reference = await message.replyTo.load(options);
+              anchorLoaded = !reference?.unavailableReason && Boolean(
+                nonEmptyString(reference?.content) || reference?.attachments?.length,
+              );
+              return reference;
+            },
+          },
+        });
+        return prepared.content;
+      },
+      onAskComplete: (sessionId) => {
+        if (!anchorLoaded || sessionId !== preparedSessionId) return;
+        if (!this.#topicAnchors.has(key) && this.#topicAnchors.size >= MAX_TOPIC_ANCHORS) {
+          this.#topicAnchors.delete(this.#topicAnchors.keys().next().value);
+        }
+        this.#topicAnchors.set(key, { sessionId, rootMessageId: rootId });
+      },
+    };
+  }
+
   /**
    * 分步直推：`#answerWithStream` 流式分支在开关开启时的完整替代路径。
    * 过程（工具调用、助手中间说明）与最终答案均以富文本 post 逐条直推
@@ -4886,30 +4955,18 @@ export class FeishuHarnessBridge {
     const messageId = event.message.message_id;
     const text = message.content;
     let askCompleted = false;
-    const markAskComplete = () => {
+    const markAskComplete = (sessionId) => {
       if (askCompleted) return;
       askCompleted = true;
+      prompt.onAskComplete?.(sessionId);
       this.#endImTurn(key);
       onAskComplete?.();
     };
     // 与流式分支一致的提示内容构造：图片与回复引用展开为富提示内容，已接受
     // 的上下文增强按原样重放。直推分流发生在 `#answerWithStream` 构造之前，
     // 这里就是本回合唯一一次构造（无重复的 prompt 往返）。
-    let content = hasInboundImages(message) || hasReplyReference(message)
-      ? await promptContentForInboundMessage(message, { signal: this.#signal, deferImages: true })
-      : undefined;
-    const snapshot = this.#acceptedMessageIds.get(messageId);
-    let contextEnhanced = false;
-    if (snapshot) {
-      const originalContent = content ?? text;
-      content = enhanceContextContent(originalContent, snapshot, () => ({
-        channel: 'feishu',
-        senderId: senderOpenId(event),
-        chatId: event.message.chat_id,
-        threadId: event.message.thread_id,
-      }));
-      contextEnhanced = content !== originalContent;
-    }
+    const prompt = await this.#preparePrompt(event, key, message);
+    const { content, contextEnhanced } = prompt;
     // Every turn reopens the per-conversation circuit breaker.
     const priorState = this.#stepPushSendState.get(key);
     if (this.#stepPushSendState.size >= MAX_STEP_PUSH_SEND_STATES && !priorState) {
@@ -5010,7 +5067,8 @@ export class FeishuHarnessBridge {
       text,
       content,
       titleText: event.batchSubmission?.title,
-      sourceGuidance: snapshot?.config?.guidance,
+      sourceGuidance: prompt.sourceGuidance,
+      prepareContent: prompt.prepareContent,
       contextEnhanced,
       createOptions: { signal: this.#signal },
       existsOptions: { signal: this.#signal },
@@ -5089,8 +5147,8 @@ export class FeishuHarnessBridge {
       // 回合结束（成功/失败/中断）：停看门狗并撤回残留思考中心跳。
       await watchdog?.stop();
     }
+    markAskComplete(completed.sessionId);
     await cot?.finish();
-    markAskComplete();
     const finalStepText = pendingStep ? pendingStep.text : null;
     pendingStep = null;
     const finalText = (typeof finalStepText === 'string' && finalStepText.trim())
@@ -5228,9 +5286,10 @@ export class FeishuHarnessBridge {
     const messageId = event.message.message_id;
     const text = message.content;
     let askCompleted = false;
-    const markAskComplete = () => {
+    const markAskComplete = (sessionId) => {
       if (askCompleted) return;
       askCompleted = true;
+      prompt.onAskComplete?.(sessionId);
       this.#endImTurn(key);
       onAskComplete?.();
     };
@@ -5241,23 +5300,10 @@ export class FeishuHarnessBridge {
     if (this.#stepPush && this.#channel?.stream) {
       return this.#answerWithStepPush(event, key, message, { onAskComplete });
     }
-    let content = hasInboundImages(message) || hasReplyReference(message)
-      ? await promptContentForInboundMessage(message, { signal: this.#signal, deferImages: true })
-      : undefined;
-    const snapshot = this.#acceptedMessageIds.get(messageId);
-    let contextEnhanced = false;
-    if (snapshot) {
-      const originalContent = content ?? text;
-      content = enhanceContextContent(originalContent, snapshot, () => ({
-        channel: 'feishu',
-        senderId: senderOpenId(event),
-        chatId: event.message.chat_id,
-        threadId: event.message.thread_id,
-      }));
-      contextEnhanced = content !== originalContent;
-    }
+    const prompt = await this.#preparePrompt(event, key, message);
+    const { content, contextEnhanced } = prompt;
     if (!this.#channel?.stream) {
-      const { answer, artifacts = [] } = await askInWorkspaceSession({
+      const { sessionId, answer, artifacts = [] } = await askInWorkspaceSession({
         deferredDelivery: () => ({ coordinator: this.#deferred, chatId, replyToMessageId: messageId }),
         harness: this.#harness,
         state: this.#state,
@@ -5265,13 +5311,14 @@ export class FeishuHarnessBridge {
         text,
         content,
         titleText: event.batchSubmission?.title,
-        sourceGuidance: snapshot?.config?.guidance,
+        sourceGuidance: prompt.sourceGuidance,
+        prepareContent: prompt.prepareContent,
         contextEnhanced,
         createOptions: { signal: this.#signal },
         existsOptions: { signal: this.#signal },
         askOptions: this.#interactionAskOptions(event, key, message.files, message.images),
       });
-      markAskComplete();
+      markAskComplete(sessionId);
       let textReceipt;
       let textSendError = null;
       try {
@@ -5346,13 +5393,14 @@ export class FeishuHarnessBridge {
             text,
             content,
             titleText: event.batchSubmission?.title,
-            sourceGuidance: snapshot?.config?.guidance,
+            sourceGuidance: prompt.sourceGuidance,
+            prepareContent: prompt.prepareContent,
             contextEnhanced,
             createOptions: { signal: this.#signal },
             existsOptions: { signal: this.#signal },
             askOptions,
           });
-          markAskComplete();
+          markAskComplete(completed.sessionId);
           completedAnswer = completed.answer;
           completedArtifacts = completed.artifacts ?? [];
           await controller.setContent(answerTextForDelivery(completedAnswer, completedArtifacts));
@@ -5410,7 +5458,7 @@ export class FeishuHarnessBridge {
       if (promptStarted) throw error;
 
       this.#logger.warn?.('[dsh-feishu] native stream unavailable; using text fallback:', error.message);
-      const { answer, artifacts = [] } = await askInWorkspaceSession({
+      const { sessionId, answer, artifacts = [] } = await askInWorkspaceSession({
         deferredDelivery: () => ({ coordinator: this.#deferred, chatId, replyToMessageId: messageId }),
         harness: this.#harness,
         state: this.#state,
@@ -5418,13 +5466,14 @@ export class FeishuHarnessBridge {
         text,
         content,
         titleText: event.batchSubmission?.title,
-        sourceGuidance: snapshot?.config?.guidance,
+        sourceGuidance: prompt.sourceGuidance,
+        prepareContent: prompt.prepareContent,
         contextEnhanced,
         createOptions: { signal: this.#signal },
         existsOptions: { signal: this.#signal },
         askOptions: this.#interactionAskOptions(event, key, message.files, message.images),
       });
-      markAskComplete();
+      markAskComplete(sessionId);
       let textReceipt;
       let textSendError = null;
       try {

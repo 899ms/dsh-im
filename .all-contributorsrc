@@ -663,6 +663,22 @@
       ]
     },
     {
+      "login": "yangzhe1991",
+      "name": "Zhe (Phil) Yang",
+      "avatar_url": "https://avatars.githubusercontent.com/u/860739",
+      "profile": "https://github.com/yangzhe1991",
+      "contributions": [
+        {
+          "type": "code",
+          "url": "https://github.com/xmanrui/dsh-im/pull/222"
+        },
+        {
+          "type": "test",
+          "url": "https://github.com/xmanrui/dsh-im/pull/222"
+        }
+      ]
+    },
+    {
       "login": "yhay81",
       "name": "Yusuke Hayashi",
       "avatar_url": "https://avatars.githubusercontent.com/u/11132792",
