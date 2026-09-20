@@ -5056,7 +5056,8 @@ test('bridge does not expose internal error details in a Feishu failure reply', 
   assert.match(sent[0], /任务未完成，暂时无法确定原因/);
   assert.match(sent[0], /错误码：INTERNAL_UNKNOWN；参考号：MF-[A-F0-9]{8}$/);
   assert.doesNotMatch(sent[0], /secret-shaped-internal-detail|private\/path/);
-  assert.equal(status.lastError, 'secret-shaped-internal-detail /private/path');
+  assert.equal(status.lastError, status.lastMessageError.message);
+  assert.doesNotMatch(JSON.stringify(status), /secret-shaped-internal-detail|private\/path/);
 });
 
 test('Feishu exposes a structured model rate limit without changing connection state', async () => {

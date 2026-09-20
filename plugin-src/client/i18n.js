@@ -1,3 +1,4 @@
+import diagnostics from '../../src/channels/shared/i18n-en/diagnostics.mjs';
 import weixinDiagnostics from '../../src/channels/weixin/connection-error.en.mjs';
 import * as React from 'react';
 
@@ -5,6 +6,7 @@ export const IM_LOCALE_NAMESPACE = 'dsh-im';
 
 const EN = Object.freeze({
   ...weixinDiagnostics,
+  ...diagnostics,
   '$locale': 'en',
   '修改别名': 'Edit alias',
   '关闭修改别名': 'Close alias editor',

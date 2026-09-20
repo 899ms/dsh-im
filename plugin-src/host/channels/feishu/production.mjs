@@ -217,6 +217,7 @@ export async function createProductionController(ctx, config = {}, internals = {
 
   const modelCatalog = () => listModelCatalog(harness);
   const coreController = new Controller({
+    logger,
     registerApp: (options) => lark.registerApp(options),
     verifyApp,
     credentials: ctx.credentials,

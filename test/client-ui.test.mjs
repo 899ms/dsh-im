@@ -1076,7 +1076,7 @@ test('DingTalk connection failures show actionable guidance and a log reference'
   assert.match(markup, /agent-base@6 固定为 6\.0\.2/);
   assert.match(markup, /stream-proxy-dependency-incompatible/);
   assert.match(markup, /DT-CONN-DEADBEEF/);
-  assert.match(markup, /class="ddt-errorDiagnostic"/);
+  assert.match(markup, /data-connection-diagnostic="true"/);
 });
 
 test('all IM channel cards keep localized actions visible above full-width feedback', async () => {

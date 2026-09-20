@@ -1,3 +1,4 @@
+import { ConnectionError } from '../../connection-error.js';
 import * as React from 'react';
 import { EmailLogoGlyph } from '../../channel-logos.js';
 import { createTokenChannelSettings } from '../shared/token-channel.js';
@@ -173,7 +174,7 @@ function AgentMailAuth({ rpcCall, endpoints, disabled, address = '', onAuthorize
             ? h('span', null, ...waitingHint(session))
             : null))
       : null,
-    error ? h('p', { className: 'dim-inlineError', role: 'alert' }, error.message ?? String(error)) : null,
+    error ? h(ConnectionError, { error: error }) : null,
     h('div', { className: 'ddt-actions dim-viewActions' },
       h('button', {
         type: 'button', className: 'ddt-button', disabled: disabled || status === 'starting',
@@ -324,7 +325,7 @@ function MailboxPanel({ busy, error, onSubmit, onCancel, rpcCall, endpoints }) {
         placeholder: 'me@example.com\n同事@example.com',
         onChange: (event) => setAllowedSenders(event.target.value),
       }), '必填。只有这些地址发来的邮件会触发 Harness；多个地址用换行或逗号分隔。')),
-    error ? h('p', { className: 'dim-inlineError', role: 'alert' }, error.message ?? String(error)) : null,
+    error ? h(ConnectionError, { error: error }) : null,
     h('div', { className: 'ddt-actions dim-viewActions' },
       h('button', { type: 'button', className: 'ddt-button', onClick: onCancel, disabled: busy }, '取消'),
       h('button', {
@@ -529,7 +530,7 @@ function SessionBindingPanel({
               onClick: () => setSenderRows(senderRows.map((row) => ({ ...row, sessionId: accountSession }))),
             }, '所有发件人同上')))
         : h('p', { className: 'dim-emailHint' }, '尚无可覆盖的发件人（先在上方配置允许的发件人）。')),
-    error ? h('p', { className: 'dim-inlineError', role: 'alert' }, error.message ?? String(error)) : null,
+    error ? h(ConnectionError, { error: error }) : null,
     notice ? h('p', { className: 'dim-emailHint', role: 'status' }, notice) : null,
     h('div', { className: 'ddt-actions dim-viewActions' },
       h('button', {
@@ -655,7 +656,7 @@ function MailboxSettings({ account, busy, error, onSave, onCancel, rpcCall, endp
         value: allowedSenders, disabled: busy,
         onChange: (event) => setAllowedSenders(event.target.value),
       }), '保存后会重新连接邮箱以使设置立即生效。')),
-    error ? h('p', { className: 'dim-inlineError', role: 'alert' }, error.message ?? String(error)) : null,
+    error ? h(ConnectionError, { error: error }) : null,
     h('div', { className: 'ddt-actions dim-viewActions' },
       h('button', { type: 'button', className: 'ddt-button', onClick: onCancel, disabled: busy }, '取消'),
       h('button', {

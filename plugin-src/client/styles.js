@@ -1,6 +1,12 @@
 export const IM_STYLE_ID = 'xmanrui-dsh-im-settings';
 
 const CSS = String.raw`
+.dim-connectionDiagnostic { min-width: 0; width: 100%; color: var(--dsw-alias-label-secondary, #646a73); overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
+.dim-connectionDiagnostic[data-warning="true"] { color: var(--dsw-alias-state-warn-primary, #d97706); }
+.dim-connectionDiagnostic p { margin: 4px 0; }
+.dim-connectionDiagnostic button { border: 1px solid var(--dsw-alias-border-l2, #dfe1e5); border-radius: 6px; padding: 6px 10px; color: inherit; background: var(--dsw-alias-bg-layer-1, #fff); font: inherit; cursor: pointer; }
+.dim-connectionDiagnostic button:focus-visible, .dim-connectionDiagnostic summary:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3370ff); outline-offset: 2px; }
+
 .dim-aliasName { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .dim-aliasName h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dim-aliasName h3:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3370ff); outline-offset: 2px; border-radius: 3px; }

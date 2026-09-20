@@ -1042,7 +1042,7 @@ test('a failing poll stops the mailbox reporting itself healthy', async () => {
       createApi: () => ({
         connect: async () => {}, disconnect: async () => {}, latestUid: async () => 0,
         listMessages: async () => {
-          if (fail) throw new Error('/v1/me failed: HTTP 401');
+          if (fail) throw Object.assign(new Error('/v1/me failed: HTTP 401 private-token'), { status: 401 });
           return [];
         },
         sendReply: async () => {}, sendText: async () => {},
@@ -1058,7 +1058,9 @@ test('a failing poll stops the mailbox reporting itself healthy', async () => {
     }
     assert.equal(runtime.status.connectionState, 'failed',
       'a failing poll must not keep reporting connected');
-    assert.match(String(runtime.status.lastError), /401/);
+    assert.equal(runtime.status.error.details.httpStatus, 401);
+    assert.equal(runtime.status.error.details.stage, 'connection.poll');
+    assert.doesNotMatch(JSON.stringify(runtime.status), /private-token|\/v1\/me/);
 
     // Recovery is reflected too.
     fail = false;

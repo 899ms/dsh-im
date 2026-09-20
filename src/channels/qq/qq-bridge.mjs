@@ -57,6 +57,7 @@ import {
   providerMessageIdsFor,
 } from '../shared/semantic/delivery.mjs';
 import {
+  messageFailureDiagnostic,
   channelDeliveryFailure,
   clearLastMessageFailure,
   messageFailureText,
@@ -612,7 +613,7 @@ export class QqHarnessBridge {
         const failure = setLastMessageFailure(this.#status, error);
         this.#logger.error?.(
           `[dsh-im:qq] failed to process a command [${failure.referenceId}]:`,
-          error,
+          messageFailureDiagnostic(error, failure),
         );
         return this.#bot.sendText(message.replyTarget, messageFailureText(failure))
           .catch(() => undefined);
@@ -876,7 +877,7 @@ export class QqHarnessBridge {
       const failure = setLastMessageFailure(this.#status, error);
       this.#logger.error?.(
         `[dsh-im:qq] failed to process a batch input message [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
       await this.#bot.sendText(message.replyTarget, messageFailureText(failure))
         .catch(() => undefined);
@@ -1208,7 +1209,7 @@ export class QqHarnessBridge {
       });
       this.#logger.error?.(
         `[dsh-im:qq] failed to process an inbound message [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
       try {
         const errorMessage = messageFailureText(failure);
@@ -1494,7 +1495,7 @@ export class QqHarnessBridge {
     const failure = setLastMessageFailure(this.#status, error);
     this.#logger.error?.(
       `[dsh-im:qq] failed to process an interaction reply [${failure.referenceId}]:`,
-      error,
+      messageFailureDiagnostic(error, failure),
     );
     if (!this.#state.hasSeen(messageId)) {
       await this.#state.markSeen(messageId).catch(() => undefined);

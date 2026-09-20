@@ -48,7 +48,7 @@ export function publicChannelStartupError(channel, error) {
   }
   return {
     code: `${channel}-startup-failed`,
-    message: t('{channel}初始化失败。请查看 DSH 启动日志中 failed to activate {id} 后的错误，修复后重启 DSH。', params),
+    message: t('{channel}初始化失败。请展开诊断详情，并通过参考号查找 DSH 启动日志，修复后重启 DSH。', params),
     details: {},
   };
 }

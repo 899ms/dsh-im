@@ -1,3 +1,4 @@
+import { extractConnectionEvidence, atConnectionStage, createConnectionDiagnostics } from '../shared/connection-error.mjs';
 import { t } from '../shared/i18n.mjs';
 import {
   createAccessPolicy,
@@ -73,6 +74,7 @@ export class EmailController {
   #defaultWorkspace;
   #deleteState;
   #logger;
+  #diagnostics;
   #runtimes = new Map();
   #errors = new Map();
   #revision = 0;
@@ -131,6 +133,7 @@ export class EmailController {
     this.#defaultWorkspace = typeof defaultWorkspace === 'string' ? defaultWorkspace : null;
     this.#deleteState = deleteState;
     this.#logger = logger;
+    this.#diagnostics = createConnectionDiagnostics({ channel: 'email', logger });
   }
 
   async initialize() {
@@ -149,7 +152,7 @@ export class EmailController {
           this.#errors.delete(config.botId);
         } catch (error) {
           this.#errors.set(config.botId, this.#safeError('connection-failed', error));
-          this.#logger.warn?.(`[dsh-im:email] bot ${config.botId} failed to start:`, error);
+          this.#logger.warn?.(`[dsh-im:email] bot ${config.botId} failed to start:`, extractConnectionEvidence(error).details);
         }
       });
     }
@@ -203,7 +206,7 @@ export class EmailController {
     await this.#withBotTransition(identity.botId, async () => {
       const previousConfig = this.#configStore.getByPlatformId(normalizedAddress);
       // resolve() returns a wrapper; the plain secret lives on .value.
-      const previousResult = await this.#credentials.resolve(identity.tokenRef).catch(() => undefined);
+      const previousResult = await atConnectionStage('credential.read', () => this.#credentials.resolve(identity.tokenRef), 'credential-store');
       const previousCredential = previousResult?.value;
       const probe = this.#createTransport({
         address: normalizedAddress,
@@ -216,8 +219,8 @@ export class EmailController {
         await probe.connect();
         await probe.disconnect();
       } catch (error) {
-        this.#logger.warn?.('[dsh-im:email] credential verification failed', error);
-        throw new Error(t('邮箱连接失败，请检查地址、应用密码与服务器设置'));
+        throw this.#diagnostics.report(error, { reuse: true, stage: 'credential.verify', operation: 'bot.bind-mailbox',
+          publicError: { code: 'email-bind-failed', message: t('邮箱连接失败，请检查地址、应用密码与服务器设置') } });
       }
       const config = {
         botId: identity.botId,
@@ -229,9 +232,9 @@ export class EmailController {
         connectedAt: new Date().toISOString(),
         ...security,
       };
-      await this.#credentials.set(identity.tokenRef, JSON.stringify(credential));
+      await atConnectionStage('credential.save', () => this.#credentials.set(identity.tokenRef, JSON.stringify(credential)), 'credential-store');
       try {
-        await this.#configStore.save(config);
+        await atConnectionStage('account.save', () => this.#configStore.save(config), 'account-config');
       } catch (error) {
         await this.#restoreCredential(identity.tokenRef, previousCredential);
         throw error;
@@ -290,7 +293,7 @@ export class EmailController {
         next.allowedSenders = normalizeEmailAccessPolicy({ allowedSenders: update.allowedSenders }).allowedSenders;
       }
       const allowlistChanged = update.allowedSenders !== undefined;
-      const saved = await this.#configStore.save(next);
+      const saved = await atConnectionStage('account.save', () => this.#configStore.save(next), 'account-config');
       if (allowlistChanged) await this.#applyAllowlistToPolicy(botId, saved);
       // Host, allowlist and approval changes take effect immediately.
       await this.#stopRuntime(botId);
@@ -340,15 +343,23 @@ export class EmailController {
   }
 
   async deleteBot(botId) {
+    const warnings = [];
     return this.#withBotTransition(botId, async () => {
       const config = this.#configStore.get(botId);
       await this.#stopRuntime(botId);
-      const removed = await this.#configStore.remove(botId);
-      if (removed?.tokenRef) await this.#credentials.unset(removed.tokenRef).catch(() => {});
-      await this.#deleteState(botId).catch(() => {});
+      let removed;
+      try { removed = await atConnectionStage('account.remove', () => this.#configStore.remove(botId), 'account-config'); }
+      catch (error) {
+        if (this.#configStore.get(botId)) throw error;
+        removed = config;
+        warnings.push(this.#diagnostics.report(error, { operation: 'bot.delete', stage: 'workspace.cleanup', warning: true,
+          publicError: { code: 'workspace-cleanup-failed', message: '账号已移除，但本地状态清理失败。' } }).publicError);
+      }
+      if (removed?.tokenRef) await atConnectionStage('credential.remove', () => this.#credentials.unset(removed.tokenRef), 'credential-store').catch(error => { warnings.push(this.#diagnostics.report(error, { reuse: true, operation: 'bot.delete', stage: 'credential.remove', warning: true, publicError: { code: 'cleanup-failed', message: '账号已移除，但登录凭据清理失败。' } }).publicError); });
+      await this.#deleteState(botId).catch(error => { warnings.push(this.#diagnostics.report(error, { reuse: true, operation: 'bot.delete', stage: 'state.cleanup', resource: 'account-state', warning: true, publicError: { code: 'cleanup-failed', message: '账号已移除，但本地状态清理失败。' } }).publicError); });
       this.#errors.delete(botId);
       this.#touch();
-      return this.status();
+      return { ...this.status(), ...(warnings.length ? { warnings } : {}) };
     });
   }
 
@@ -356,7 +367,7 @@ export class EmailController {
     const bots = this.#configStore.list().map((config) => {
       const runtime = this.#runtimes.get(config.botId);
       const runtimeStatus = runtime?.status ?? null;
-      const error = this.#errors.get(config.botId);
+      const error = runtimeStatus?.error ?? this.#errors.get(config.botId);
       // The connection supervisor and the settings client both read these
       // fields, so a mailbox reports connectivity the same way every other
       // token channel does.
@@ -542,7 +553,7 @@ export class EmailController {
     try {
       await this.#ensureWorkspace(botId, config);
     } catch (error) {
-      this.#logger.warn?.('[dsh-im:email] failed to prepare the bot workspace:', error);
+      this.#logger.warn?.('[dsh-im:email] failed to prepare the bot workspace:', extractConnectionEvidence(error).details);
       throw new Error(t('邮箱访问策略同步失败，请重试'));
     }
   }
@@ -560,12 +571,12 @@ export class EmailController {
   async #rollbackBind(config, previousConfig, previousCredential) {
     await this.#restoreCredential(config.tokenRef, previousCredential);
     try {
-      if (previousConfig) await this.#configStore.save(previousConfig);
-      else await this.#configStore.remove(config.botId);
+      if (previousConfig) await atConnectionStage('account.save', () => this.#configStore.save(previousConfig), 'account-config');
+      else await atConnectionStage('account.remove', () => this.#configStore.remove(config.botId), 'account-config');
     } catch (error) {
       // The bind failure is the error the user needs to see; a rollback that
       // could not complete is reported alongside it rather than replacing it.
-      this.#logger.warn?.('[dsh-im:email] failed to roll back the mailbox config:', error);
+      this.#logger.warn?.('[dsh-im:email] failed to roll back the mailbox config:', extractConnectionEvidence(error).details);
     }
   }
 
@@ -577,7 +588,7 @@ export class EmailController {
     } catch (error) {
       // The mailbox itself is already saved and connected; a policy push
       // failure must not undo that, but it is surfaced for diagnosis.
-      this.#logger.warn?.('[dsh-im:email] failed to sync the access policy:', error);
+      this.#logger.warn?.('[dsh-im:email] failed to sync the access policy:', extractConnectionEvidence(error).details);
       throw new Error(t('邮箱访问策略同步失败，请重试'));
     }
   }
@@ -608,7 +619,7 @@ export class EmailController {
    * the stored JSON is unwrapped from there rather than parsed directly.
    */
   async #resolveSecrets(config) {
-    const result = await this.#credentials.resolve(config.tokenRef).catch(() => undefined);
+    const result = await atConnectionStage('credential.read', () => this.#credentials.resolve(config.tokenRef), 'credential-store');
     const stored = result?.value;
     if (typeof stored === 'string' && stored) {
       try {
@@ -632,7 +643,7 @@ export class EmailController {
   async #startRuntime(config, credential) {
     // Production owns state/workspace resolution; the controller only passes
     // the identity and the mailbox secret through.
-    const runtime = await this.#createRuntime({
+    const runtime = await atConnectionStage('runtime.prepare', () => this.#createRuntime({
       botId: config.botId,
       config,
       // `token` stays for the shared runtime shape; the full credential is what
@@ -644,7 +655,7 @@ export class EmailController {
       // Its own default is IMAP/SMTP, so without this an Agent mailbox was
       // dialled as a mail server and failed with ECONNREFUSED on port 993.
       createTransport: (options) => this.#createTransport(options.config ?? options),
-    });
+    }));
     if (!runtime || typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
       throw new TypeError('createRuntime returned an invalid Email runtime');
     }
@@ -662,7 +673,7 @@ export class EmailController {
     const runtime = this.#runtimes.get(botId);
     this.#runtimes.delete(botId);
     await runtime?.stop().catch((error) => {
-      this.#logger.warn?.(`[dsh-im:email] bot ${botId} failed to stop cleanly:`, error);
+      this.#logger.warn?.(`[dsh-im:email] bot ${botId} failed to stop cleanly:`, extractConnectionEvidence(error).details);
     });
   }
 
@@ -731,7 +742,7 @@ export class EmailController {
     try {
       identity = await fetchAgentMailIdentity({ workspace: pending.workspace });
     } catch (error) {
-      this.#logger.warn?.('[dsh-im:email] unable to resolve the mailbox identity:', error);
+      this.#logger.warn?.('[dsh-im:email] unable to resolve the mailbox identity:', extractConnectionEvidence(error).details);
     }
     return {
       status: 'authorized',
@@ -778,29 +789,22 @@ export class EmailController {
       ...(typeof tokens.refreshToken === 'string' && tokens.refreshToken
         ? { refreshToken: tokens.refreshToken } : {}),
     };
-    await this.#credentials.set(config.tokenRef, JSON.stringify(next));
+    await atConnectionStage('credential.save', () => this.#credentials.set(config.tokenRef, JSON.stringify(next)), 'credential-store');
     this.#touch();
     return true;
   }
 
   async #restoreCredential(tokenRef, previous) {
     if (typeof previous !== 'string' || !previous) {
-      await this.#credentials.unset(tokenRef).catch(() => {});
+      await atConnectionStage('credential.remove', () => this.#credentials.unset(tokenRef), 'credential-store').catch(() => {});
       return;
     }
-    await this.#credentials.set(tokenRef, previous).catch(() => {});
+    await atConnectionStage('credential.save', () => this.#credentials.set(tokenRef, previous), 'credential-store').catch(() => {});
   }
 
+  get diagnostics() { return this.#diagnostics; }
   #safeError(code, error) {
-    // An AggregateError commonly carries an empty message with the real reason
-    // on `code` (ECONNREFUSED etc.). `??` does not fall through an empty
-    // string, so an empty message used to be reported as an empty error.
-    const message = String(error?.message ?? '').trim();
-    const detail = message
-      || String(error?.code ?? '').trim()
-      || String(error?.cause?.message ?? '').trim()
-      || String(error ?? '').trim();
-    return { code, message: detail || code };
+    return this.#diagnostics.report(error, { reuse: true, stage: 'connection.start', code }).publicError;
   }
 
   #touch() {

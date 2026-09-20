@@ -65,6 +65,7 @@ import {
 import { recoverAssistantTextByTimestamp } from '../shared/session-reply-recovery.mjs';
 import { DINGTALK_RECENT_OUTBOUND_MATCH_TOLERANCE_MS } from './state-store.mjs';
 import {
+  messageFailureDiagnostic,
   channelDeliveryFailure,
   clearLastMessageFailure,
   messageFailureText,
@@ -740,7 +741,7 @@ export class DingtalkHarnessBridge {
         const failure = setLastMessageFailure(this.#status, error);
         this.#logger.error?.(
           `[dsh-dingtalk] failed to process a command [${failure.referenceId}]`,
-          safeErrorDiagnostic(error),
+          messageFailureDiagnostic(error, failure),
         );
         return this.#send(sessionWebhook, messageFailureText(failure), this.#atUsersFor(message)).catch(() => undefined);
       }).finally(() => {
@@ -1207,7 +1208,7 @@ export class DingtalkHarnessBridge {
       const failure = setLastMessageFailure(this.#status, error);
       this.#logger.error?.(
         `[dsh-dingtalk] failed to process a batch input message [${failure.referenceId}]`,
-        safeErrorDiagnostic(error),
+        messageFailureDiagnostic(error, failure),
       );
       await this.#send(sessionWebhook, messageFailureText(failure)).catch(() => undefined);
     }).finally(() => {
@@ -1486,7 +1487,7 @@ export class DingtalkHarnessBridge {
       });
       this.#logger.error?.(
         `[dsh-dingtalk] failed to process an inbound message [${failure.referenceId}]`,
-        safeErrorDiagnostic(error),
+        messageFailureDiagnostic(error, failure),
       );
       try {
         const errorText = messageFailureText(failure);

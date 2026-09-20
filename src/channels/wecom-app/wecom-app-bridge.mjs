@@ -52,6 +52,7 @@ import {
   promptContentForInboundMessage,
 } from '../shared/semantic/reply-reference.mjs';
 import {
+  messageFailureDiagnostic,
   channelDeliveryFailure,
   clearLastMessageFailure,
   messageFailureText,
@@ -325,7 +326,7 @@ export class WecomAppBridge {
           const failure = setLastMessageFailure(this.#status, error);
           this.#logger.error?.(
             `[dsh-im:wecom-app] failed to process a command [${failure.referenceId}]:`,
-            error,
+            messageFailureDiagnostic(error, failure),
           );
           return this.#send(sender, messageFailureText(failure)).catch(() => undefined);
         })
@@ -426,7 +427,7 @@ export class WecomAppBridge {
       const failure = setLastMessageFailure(this.#status, error);
       this.#logger.error?.(
         `[dsh-im:wecom-app] failed to process a batch input message [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
       await this.#send(sender, messageFailureText(failure)).catch(() => undefined);
     }).finally(() => {
@@ -720,7 +721,7 @@ export class WecomAppBridge {
       });
       this.#logger.error?.(
         `[dsh-im:wecom-app] failed to process an inbound message [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
       try {
         await this.#send(
@@ -1006,7 +1007,7 @@ export class WecomAppBridge {
     const failure = setLastMessageFailure(this.#status, error);
     this.#logger.error?.(
       `[dsh-im:wecom-app] failed to process an interaction reply [${failure.referenceId}]:`,
-      error,
+      messageFailureDiagnostic(error, failure),
     );
     if (!this.#state.hasSeen(messageId)) {
       await this.#state.markSeen(messageId).catch(() => undefined);

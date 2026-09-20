@@ -1,3 +1,4 @@
+import { diagnosticFields } from '../../../../src/channels/shared/diagnostic-details.mjs';
 import { normalizeBotAlias } from '../../../../src/channels/shared/bot-alias.mjs';
 import { normalizeAgentPresetCatalog, normalizeAgentPresetId, SET_AGENT_PRESET_ENDPOINT } from '../../agent-preset.js';
 import { normalizeModelCatalog, normalizeModelSelection, SET_MODEL_ENDPOINT } from '../../model-setting.js';
@@ -49,7 +50,8 @@ export function createTokenChannelApi(channel, connectionSummary, {
     if (!result.ok) {
       const error = new Error(text(result.error?.message, `${channel} 操作失败`));
       error.code = text(result.error?.code, `${channel.toUpperCase()}_RPC_ERROR`, 80);
-      throw error;
+      Object.assign(error, diagnosticFields(result.error));
+    throw error;
     }
     return result.value;
   };
@@ -85,6 +87,7 @@ export function createTokenChannelApi(channel, connectionSummary, {
       },
       lastMessageError: normalizeLastMessageError(value.lastMessageError),
       error: isRecord(value.error) ? {
+        ...diagnosticFields(value.error),
         code: text(value.error.code, `${channel.toUpperCase()}_ACCOUNT_ERROR`, 80),
         message: text(value.error.message, `${channel}连接尚未就绪`),
       } : null,
@@ -109,6 +112,7 @@ export function createTokenChannelApi(channel, connectionSummary, {
   };
 
   const presentError = (error) => ({
+    ...diagnosticFields(error),
     code: text(error?.code, `${channel.toUpperCase()}_ERROR`, 80),
     message: text(error?.message, `${channel}操作失败，请稍后重试`),
   });
