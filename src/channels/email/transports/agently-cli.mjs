@@ -36,8 +36,8 @@ const PLATFORM_PACKAGES = {
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 export class AgentMailCliError extends Error {
-  constructor(message, { code = 'cli-failed', status = null, detail = null } = {}) {
-    super(message);
+  constructor(message, { code = 'cli-failed', status = null, detail = null, cause } = {}) {
+    super(message, { cause });
     this.name = 'AgentMailCliError';
     this.code = code;
     if (status !== null) this.status = status;
@@ -96,7 +96,7 @@ export function startCliLogin({ signal, timeoutMs = 30_000, env = {}, workspace 
       });
     } catch (error) {
       reject(new AgentMailCliError(`unable to launch agently-cli: ${error.message}`, {
-        code: 'cli-unavailable',
+        code: 'cli-unavailable', cause: error,
       }));
       return;
     }
@@ -144,7 +144,7 @@ export function startCliLogin({ signal, timeoutMs = 30_000, env = {}, workspace 
     child.on('error', (error) => {
       stop();
       reject(new AgentMailCliError(`agently-cli failed to start: ${error.message}`, {
-        code: 'cli-unavailable',
+        code: 'cli-unavailable', cause: error,
       }));
     });
     child.on('close', () => {
@@ -187,7 +187,7 @@ export function runCli(args, {
       });
     } catch (error) {
       reject(new AgentMailCliError(`unable to launch agently-cli (${source}): ${error.message}`, {
-        code: 'cli-unavailable',
+        code: 'cli-unavailable', cause: error,
       }));
       return;
     }
@@ -226,7 +226,7 @@ export function runCli(args, {
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => {
       finish(reject, new AgentMailCliError(`agently-cli failed to start: ${error.message}`, {
-        code: 'cli-unavailable',
+        code: 'cli-unavailable', cause: error,
       }));
     });
     child.on('close', (exitCode) => {

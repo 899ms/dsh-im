@@ -1,3 +1,4 @@
+import { ConnectionError, normalizeConnectionError } from '../../connection-error.js';
 import { BotName } from '../../bot-alias.js';
 import * as React from 'react';
 
@@ -176,16 +177,7 @@ function ProgressPanel({ status, busy, onCancel }) {
       h(Button, { onClick: onCancel, disabled: busy }, '取消接入')));
 }
 
-function ConnectionErrorDiagnostic({ error }) {
-  if (!error) return null;
-  return h('div', { className: 'ddt-errorDiagnostic' },
-    error.hint ? h('p', { className: 'ddt-errorHint' }, error.hint) : null,
-    h('span', { className: 'ddt-errorCode' },
-      h('span', null, '错误码'), `: ${error.code}`,
-      error.referenceId
-        ? h(React.Fragment, null, ' · ', h('span', null, '参考号'), `: ${error.referenceId}`)
-        : null));
-}
+function ConnectionErrorDiagnostic({ error }) { return error ? h(ConnectionError, { error, showMessage: false }) : null; }
 
 function ProvisionError({ provision, busy, onRetry, onClose }) {
   const error = provision.error ?? {
@@ -198,8 +190,7 @@ function ProvisionError({ provision, busy, onRetry, onClose }) {
       h('h3', null, provision.status === 'expired'
         ? '二维码已过期'
         : connectionFailed ? '机器人已保存，但连接未就绪' : '钉钉机器人没有接入完成'),
-      h('p', null, error.message),
-      h(ConnectionErrorDiagnostic, { error }),
+      h(ConnectionError, { error }),
       h('div', { className: 'ddt-actions dim-viewActions' },
         connectionFailed
           ? h(Button, { kind: 'primary', onClick: onClose, disabled: busy }, '查看已保存的机器人')
@@ -364,6 +355,7 @@ function AccountList(props) {
 const EMPTY_TOTALS = Object.freeze({ configured: 0, connected: 0 });
 
 export function DingtalkSettingsTab({ rpcCall }) {
+  const [operationError, setOperationError] = React.useState(null);
   const [model, setModel] = React.useState({
     phase: 'loading', bots: [], totals: EMPTY_TOTALS, revision: 0, error: null,
     agentPresetCatalog: EMPTY_AGENT_PRESET_CATALOG,
@@ -445,7 +437,16 @@ export function DingtalkSettingsTab({ rpcCall }) {
 
   const invoke = React.useCallback(async (endpoint, payload = {}, signal) => {
     if (typeof rpcCall !== 'function') throw new TypeError('钉钉设置页缺少 RPC 连接');
-    return unwrapRpcResult(await rpcCall(endpoint, payload, signal));
+    const operation = !['connection.status', 'provision.poll', 'provision.begin', 'provision.cancel'].includes(endpoint);
+    if (operation && mountedRef.current) setOperationError(null);
+    try {
+      const value = unwrapRpcResult(await rpcCall(endpoint, payload, signal));
+      if (operation && mountedRef.current) setOperationError(value?.testMessage?.error ?? value?.warnings?.[0] ?? null);
+      return value;
+    } catch (error) {
+      if (endpoint === 'bot.delete' && mountedRef.current && !signal?.aborted && error?.name !== 'AbortError') setOperationError(normalizeConnectionError(error));
+      throw error;
+    }
   }, [rpcCall]);
 
   const loadStatus = React.useCallback(async ({
@@ -896,6 +897,7 @@ export function DingtalkSettingsTab({ rpcCall }) {
   }, h(AgentPresetCatalogContext.Provider, {
     value: model.agentPresetCatalog ?? EMPTY_AGENT_PRESET_CATALOG,
   }, h('section', { className: 'ddt-page dim-channelPage', 'aria-label': '钉钉设置' },
+    operationError ? h(ConnectionError, { error: operationError }) : null,
     h(Heading, {
       totals: model.totals,
       adding: Boolean(provision),

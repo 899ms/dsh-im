@@ -1,3 +1,4 @@
+import { createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 
 import {
@@ -694,6 +695,7 @@ export class WhatsappRuntime {
   #contextEnhancement;
   #accessPolicy;
   #logger;
+  #diagnostics;
   #replyTimeoutMs;
   #connectTimeoutMs;
   #mediaUploadTimeoutMs;
@@ -727,7 +729,7 @@ export class WhatsappRuntime {
     this.#state = state;
     this.#contextEnhancement = contextEnhancement;
     this.#accessPolicy = accessPolicy;
-    this.#logger = logger;
+    this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'whatsapp', logger });
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#connectTimeoutMs = connectTimeoutMs;
     if (!Number.isSafeInteger(mediaUploadTimeoutMs) || mediaUploadTimeoutMs <= 0) {
@@ -755,8 +757,8 @@ export class WhatsappRuntime {
     await this.stop();
     this.#status.startedAt = new Date().toISOString();
     this.#status.connectionState = 'connecting';
-    this.#status.lastError = null;
-    await this.#harness.ensureRunning();
+    this.#status.lastError = null; this.#status.error = null; this.#diagnostics.clear();
+    await atConnectionStage('harness.check', () => this.#harness.ensureRunning());
     this.#status.harnessReachable = true;
     const controller = new AbortController();
     this.#abortController = controller;
@@ -794,7 +796,8 @@ export class WhatsappRuntime {
           if (controller.signal.aborted) return;
           this.#status.ready = false;
           this.#status.connectionState = 'failed';
-          this.#status.lastError = error?.message ?? 'WhatsApp Web connection closed';
+          this.#status.error = this.#diagnostics.report(error, { operation: 'connection.monitor', botId: this.#config?.botId, automatic: true }).publicError;
+          this.#status.lastError = this.#status.error.message;
         },
       });
       this.#session = session;
@@ -845,7 +848,8 @@ export class WhatsappRuntime {
     } catch (error) {
       this.#status.ready = false;
       this.#status.connectionState = 'failed';
-      this.#status.lastError = error?.message ?? String(error);
+      this.#status.error = this.#diagnostics.report(error, { operation: 'connection.monitor', botId: this.#config?.botId, automatic: true }).publicError;
+      this.#status.lastError = this.#status.error.message;
       await this.stop();
       throw error;
     }

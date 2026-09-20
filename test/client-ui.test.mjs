@@ -327,7 +327,7 @@ test('the general settings page uses an Attachments tab with contextual help and
   assert.match(markup, /id="dim-general-settings-panel-attachments"[^>]*role="tabpanel"[^>]*aria-labelledby="dim-general-settings-tab-attachments"/);
   assert.equal((markup.match(/role="tab"/g) ?? []).length, 1);
   // No label wrapper: the input takes its accessible name from the heading.
-  assert.doesNotMatch(markup, /<label/);
+  assert.doesNotMatch(markup, /<label[^>]*>[^<]*<input[^>]*id="dim-globalTtlInput"/);
   assert.match(markup, /<input[^>]*aria-labelledby="dim-globalTtlTitle"/);
   assert.match(markup, /aria-label="查看附件保留时长说明"/);
   assert.match(markup, /class="dim-globalTtlTooltip" role="tooltip"/);
@@ -416,7 +416,7 @@ test('the TTL input saves explicitly, preserves invalid text for correction, and
     await flushMicrotasks();
   });
   const input = () => renderer.root.findByProps({ id: 'dim-globalTtlInput' });
-  const form = () => renderer.root.findByProps({ className: 'dim-globalTtlRow' });
+  const form = () => renderer.root.findAllByType('form').find((form) => form.props.className === 'dim-globalTtlRow');
   const saveButton = () => findButton(renderer, '保存');
   const inlineNote = () => renderer.root.findAllByProps({ className: 'dim-globalInline' })
     .at(-1);
@@ -485,7 +485,7 @@ test('a failed explicit save keeps the input enabled with the error inline', asy
     await flushMicrotasks();
   });
   const input = () => renderer.root.findByProps({ id: 'dim-globalTtlInput' });
-  const form = () => renderer.root.findByProps({ className: 'dim-globalTtlRow' });
+  const form = () => renderer.root.findAllByType('form').find((form) => form.props.className === 'dim-globalTtlRow');
 
   await act(async () => {
     input().props.onChange({ target: { value: '72' } });
@@ -1089,7 +1089,7 @@ test('DingTalk connection failures show actionable guidance and a log reference'
   assert.match(markup, /agent-base@6 固定为 6\.0\.2/);
   assert.match(markup, /stream-proxy-dependency-incompatible/);
   assert.match(markup, /DT-CONN-DEADBEEF/);
-  assert.match(markup, /class="ddt-errorDiagnostic"/);
+  assert.match(markup, /data-connection-diagnostic="true"/);
 });
 
 test('all IM channel cards keep localized actions visible above full-width feedback', async () => {
@@ -2146,10 +2146,19 @@ test('the email entry point stays hidden while the Host reports the channel clos
   });
   assert.equal(hasMailbox(), false,
     'an explicit closed answer also hides the entry point');
+  const { registerManagementRpc } = await import('../plugin-src/management-rpc.mjs');
+  const { managementFetch } = await import('./fixtures/management-rpc.mjs');
+  let emailRpcCall;
+  registerManagementRpc({
+    connection: { fetch: managementFetch((_channel, handler) => { emailRpcCall = handler; }) },
+  }, '/email', async (endpoint) => {
+    assert.equal(endpoint, 'channel.availability');
+    return { ok: true, value: { enabled: true } };
+  });
   await TestRenderer.act(async () => {
     renderer = TestRenderer.create(React.createElement(IMSettingsTab, {
       ...rpcCalls,
-      emailRpcCall: async () => ({ ok: true, value: { enabled: true } }),
+      emailRpcCall,
     }));
   });
   assert.equal(hasMailbox(), true,

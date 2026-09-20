@@ -1,3 +1,4 @@
+import { loadDeferredImages } from '../../helpers/deferred-images.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
@@ -1010,7 +1011,8 @@ test('bridge downloads an inbound Feishu image once and submits structured Harne
     channel: {},
     harness: {
       sessionExists: async () => true,
-      ask: async (sessionId, content) => {
+      ask: async (sessionId, content, options) => {
+        content = await loadDeferredImages(content, options);
         asked.push({ sessionId, content });
         return '看到了一张图片';
       },
@@ -1335,7 +1337,7 @@ test('bridge tells users to grant im:message:readonly when Feishu rejects image 
     channel: {},
     harness: {
       sessionExists: async () => true,
-      ask: async () => assert.fail('permission failures must not reach Harness'),
+      ask: async (_sessionId, content, options) => { await loadDeferredImages(content, options); assert.fail('invalid images must not reach the model'); },
     },
     state: fixture.state,
     status: bridgeStatus(),
@@ -1382,7 +1384,8 @@ test('bridge sends Feishu post text and all embedded images as one structured pr
     channel: {},
     harness: {
       sessionExists: async () => true,
-      ask: async (sessionId, content) => {
+      ask: async (sessionId, content, options) => {
+        content = await loadDeferredImages(content, options);
         asked.push({ sessionId, content });
         return '两张图片都已收到';
       },
@@ -5056,7 +5059,8 @@ test('bridge does not expose internal error details in a Feishu failure reply', 
   assert.match(sent[0], /任务未完成，暂时无法确定原因/);
   assert.match(sent[0], /错误码：INTERNAL_UNKNOWN；参考号：MF-[A-F0-9]{8}$/);
   assert.doesNotMatch(sent[0], /secret-shaped-internal-detail|private\/path/);
-  assert.equal(status.lastError, 'secret-shaped-internal-detail /private/path');
+  assert.equal(status.lastError, status.lastMessageError.message);
+  assert.doesNotMatch(JSON.stringify(status), /secret-shaped-internal-detail|private\/path/);
 });
 
 test('Feishu exposes a structured model rate limit without changing connection state', async () => {

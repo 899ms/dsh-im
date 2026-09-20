@@ -15,6 +15,8 @@ import {
   imageFileSourcesFromContent,
   isModelImageRejection,
 } from './image-prompt.mjs';
+import { imageInputLimits } from './image-input-policy.mjs';
+import { inboundImagesAsFiles, imageContentFromStaged, isImageAdmissionRejection, IMAGE_HOST_LIMIT_FALLBACK_PROMPT } from './image-input.mjs';
 import { imSourceGuidance } from './im-source-guidance.mjs';
 import { outboundArtifactRegistry } from './semantic/artifact.mjs';
 import { t } from './i18n.mjs';
@@ -354,8 +356,21 @@ export function textFromHarnessContent(content) {
     .trim();
 }
 
+/** Join only reasoning blocks from one Harness message payload. */
+export function reasoningFromHarnessContent(content) {
+  return (Array.isArray(content) ? content : [])
+    .filter((part) => part?.type === 'reasoning' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+}
+
 function assistantMessageText(event) {
   return textFromHarnessContent(event?.data?.message?.content);
+}
+
+function assistantReasoningText(event) {
+  return reasoningFromHarnessContent(event?.data?.message?.content);
 }
 
 /** Aggregate assistant text in stable step/index order for one Harness Turn. */
@@ -527,10 +542,15 @@ export class HarnessReplyTracker {
   #toolNames = new Map();
   #lastToolName = null;
   #transientSeqs = new Set();
+  #reasoning = false;
 
-  constructor({ promptRpcId, afterSeq = -1 }) {
+  constructor({ promptRpcId, afterSeq = -1, reasoning = false }) {
     this.#promptRpcId = promptRpcId;
     this.#lastSeq = afterSeq;
+    // Reasoning updates are opt-in per consumer: only channels that surface
+    // thinking traces (Telegram thinking mode) subscribe; every other channel
+    // keeps its pre-thinking-traces update stream untouched.
+    this.#reasoning = reasoning === true;
   }
 
   get finished() {
@@ -698,6 +718,14 @@ export class HarnessReplyTracker {
             ...(live ? { turn: this.#targetTurn } : {}),
           });
         }
+        // Thinking-trace channels consume this as the 💭 line that precedes the
+        // tool call it explains; only consumers that explicitly subscribed
+        // (reasoning: true) see these updates, so default-mode channels keep
+        // their pre-thinking-traces progress stream.
+        if (this.#reasoning) {
+          const reasoning = assistantReasoningText(event);
+          if (reasoning) pushUpdate({ type: 'reasoning', step, text: reasoning });
+        }
         this.#commitText(this.#assistantText.text, pushUpdate);
         continue;
       }
@@ -760,6 +788,19 @@ export class HarnessReplyTracker {
   consume(entries) {
     return this.consumeAll(entries).at(-1) ?? null;
   }
+}
+
+/**
+ * Progress updates an ask() consumer actually receives. latest 模式只投递一条
+ * 最新进展；assistant-message 是分步推送专用更新，且 canonical 去重后可能成为
+ * 批次唯一变化，绝不能冒充进度投给全部渠道。reasoning 同为思考留痕渠道专用，
+ * 默认模式下不得冒充进度（钉钉、企微等会展示其 text）。
+ */
+export function visibleProgressUpdates(updates, progressMode) {
+  if (progressMode === 'all') return updates;
+  return updates
+    .filter((update) => update.type !== 'assistant-message' && update.type !== 'reasoning')
+    .slice(-1);
 }
 
 export class HarnessRpcError extends Error {
@@ -851,6 +892,7 @@ export class HarnessClient {
   #controlExecutor;
   #sessionMaintenanceExecutor;
   #fileIngressExecutor;
+  #imageInputPolicy;
   #managedProcess = null;
   #interactionRegistry;
   #interactionOwnerships;
@@ -875,6 +917,7 @@ export class HarnessClient {
     controlExecutor,
     sessionMaintenanceExecutor,
     fileIngressExecutor,
+    imageInputPolicy = () => undefined,
   }) {
     if (typeof createWebSocket !== 'function') {
       throw new TypeError('createWebSocket must be a function');
@@ -926,6 +969,7 @@ export class HarnessClient {
     this.#controlExecutor = controlExecutor;
     this.#sessionMaintenanceExecutor = sessionMaintenanceExecutor;
     this.#fileIngressExecutor = fileIngressExecutor;
+    this.#imageInputPolicy = imageInputPolicy;
     this.#interactionRegistry = interactionRegistry(this.#baseUrl?.origin ?? interactionScope);
     this.#interactionOwnerships = this.#interactionRegistry.ownerships;
     this.#interactionClaims = this.#interactionRegistry.claims;
@@ -1560,6 +1604,10 @@ export class HarnessClient {
     });
   }
 
+  async getImageInputLimits() {
+    return imageInputLimits(await this.#imageInputPolicy());
+  }
+
   async ask(sessionId, prompt, options = {}) {
     if (typeof options === 'number') options = { timeoutMs: options };
     const timeoutMs = options.timeoutMs ?? 600_000;
@@ -1568,6 +1616,9 @@ export class HarnessClient {
     const progressMode = options.progressMode === 'live'
       ? 'live'
       : options.progressMode === 'all' ? 'all' : 'latest';
+    // Reasoning updates only exist for consumers that opt in (thinking-trace
+    // mode); default ask() consumers keep the pre-thinking-traces stream.
+    const reasoning = options.reasoning === true;
     const onArtifact = typeof options.onArtifact === 'function' ? options.onArtifact : null;
     const onInteraction = typeof options.onInteraction === 'function'
       ? options.onInteraction
@@ -1577,6 +1628,7 @@ export class HarnessClient {
       : undefined;
     const control = normalizeControl(options.control);
     const inboundFiles = Array.isArray(options.files) ? options.files.filter(Boolean) : [];
+    const inboundImages = Array.isArray(options.images) ? options.images.filter(Boolean) : [];
     await this.ensureRunning({ signal });
     const before = await this.rpc(
       'session.history',
@@ -1587,7 +1639,7 @@ export class HarnessClient {
     const baselineSeq = Math.max(-1, ...(before.events ?? []).map(({ event }) => event.seq ?? -1));
     const promptRpcId = `${this.#rpcIdPrefix}-${randomUUID()}`;
     const releasePromptInputOrigin = registerImInputOrigin(this.#interactionRegistry, promptRpcId);
-    const tracker = new HarnessReplyTracker({ promptRpcId, afterSeq: baselineSeq });
+    const tracker = new HarnessReplyTracker({ promptRpcId, afterSeq: baselineSeq, reasoning });
     let lastProgressAt = Date.now();
     let lastPollSeq = tracker.lastSeq;
     let progressTail = Promise.resolve();
@@ -1602,7 +1654,9 @@ export class HarnessClient {
       if (!onUpdate) return progressTail;
       const visibleUpdates = progressMode === 'all' || progressMode === 'live'
         ? updates
-        : updates.filter((update) => update.type !== 'assistant-message').slice(-1);
+        : updates
+            .filter((update) => update.type !== 'assistant-message' && update.type !== 'reasoning')
+            .slice(-1);
       for (const update of visibleUpdates) {
         progressTail = progressTail
           .then(() => onUpdate(update))
@@ -1687,6 +1741,26 @@ export class HarnessClient {
         stagedBatches.push(staged);
         prompt = appendInboundFilesToPrompt(prompt, staged);
       }
+      if (inboundImages.length > 0) {
+        const limits = await this.getImageInputLimits();
+        const sources = inboundImagesAsFiles(inboundImages, limits);
+        let staged;
+        try {
+          staged = await this.#stageWorkspaceFiles(sessionId, sources, signal);
+        } catch (error) {
+          // Ingress wraps loader errors; retain the original image diagnostic.
+          if (signal?.aborted) throw signal.reason ?? error;
+          if (error?.cause?.name === 'ImagePromptError') throw error.cause;
+          throw error;
+        }
+        stagedBatches.push(staged);
+        const images = await imageContentFromStaged(staged, limits, { signal });
+        const originalContent = typeof basePrompt === 'string'
+          ? [{ type: 'text', text: basePrompt }] : basePrompt;
+        prompt = appendInboundFilesToPrompt([...originalContent, ...images], {
+          files: stagedBatches.flatMap((batch) => batch.files),
+        });
+      }
       if (interactionSignal) {
         let markOpen;
         const opened = new Promise((resolve) => { markOpen = resolve; });
@@ -1737,29 +1811,32 @@ export class HarnessClient {
         // Session workspace and named in a text manifest — then retry once
         // with a text-only prompt. The retry reuses promptRpcId so reply
         // tracking, control and interaction ownership stay bound to this ask.
-        const imageSources = isModelImageRejection(error)
-          ? imageFileSourcesFromContent(content)
-          : [];
-        if (imageSources.length === 0) throw error;
-        let stagedImages;
-        try {
-          stagedImages = await this.#stageWorkspaceFiles(sessionId, imageSources, signal);
-        } catch (stagingError) {
-          if (signal?.aborted) throw signal.reason ?? stagingError;
-          console.warn(
-            '[dsh-im] unable to restage rejected images as workspace files:',
-            this.#logPrefix,
-            stagingError?.message ?? String(stagingError),
-          );
-          throw error;
+        const originalsStaged = inboundImages.length > 0 && isImageAdmissionRejection(error)
+          && content.some((part) => part.type === 'image');
+        const imageSources = !originalsStaged && isModelImageRejection(error)
+          ? imageFileSourcesFromContent(content) : [];
+        if (!originalsStaged && imageSources.length === 0) throw error;
+        if (!originalsStaged) {
+          let stagedImages;
+          try {
+            stagedImages = await this.#stageWorkspaceFiles(sessionId, imageSources, signal);
+          } catch (stagingError) {
+            if (signal?.aborted) throw signal.reason ?? stagingError;
+            console.warn(
+              '[dsh-im] unable to restage rejected images as workspace files:',
+              this.#logPrefix,
+              stagingError?.message ?? String(stagingError),
+            );
+            throw error;
+          }
+          stagedBatches.push(stagedImages);
         }
-        stagedBatches.push(stagedImages);
         const baseContent = typeof basePrompt === 'string'
           ? [{ type: 'text', text: basePrompt }]
           : basePrompt;
         const fallbackPrompt = appendInboundFilesToPrompt([
           ...contentWithoutImages(baseContent),
-          { type: 'text', text: t(IMAGE_FILE_FALLBACK_PROMPT) },
+          { type: 'text', text: t(isModelImageRejection(error) ? IMAGE_FILE_FALLBACK_PROMPT : IMAGE_HOST_LIMIT_FALLBACK_PROMPT) },
         ], { files: stagedBatches.flatMap((batch) => batch?.files ?? []) });
         await sendPrompt(fallbackPrompt);
       }

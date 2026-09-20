@@ -64,6 +64,7 @@ import {
   providerMessageIdsFor,
 } from './semantic/delivery.mjs';
 import {
+  messageFailureDiagnostic,
   channelDeliveryFailure,
   clearLastMessageFailure,
   messageFailureText,
@@ -167,6 +168,7 @@ export class TextHarnessBridge {
   #deferred;
   #contextEnhancement;
   #accessPolicy;
+  #thinkingTraces;
   #status;
   #logger;
   #replyTimeoutMs;
@@ -194,6 +196,7 @@ export class TextHarnessBridge {
     state,
     contextEnhancement,
     accessPolicy,
+    thinkingTraces = false,
     status = createTextBridgeStatus(),
     logger = console,
     replyTimeoutMs = 600_000,
@@ -210,6 +213,7 @@ export class TextHarnessBridge {
     this.#state = state;
     this.#contextEnhancement = contextEnhancement;
     this.#accessPolicy = accessPolicy;
+    this.#thinkingTraces = thinkingTraces;
     this.#status = status;
     this.#logger = logger;
     this.#replyTimeoutMs = replyTimeoutMs;
@@ -475,7 +479,7 @@ export class TextHarnessBridge {
       const failure = setLastMessageFailure(this.#status, error);
       this.#logger.error?.(
         `[dsh-im:${this.#descriptor.key}] failed to process a batch input message [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
     }).finally(() => {
       this.#acceptedMessageIds.delete(messageId);
@@ -584,7 +588,7 @@ export class TextHarnessBridge {
       const failure = setLastMessageFailure(this.#status, error);
       this.#logger.error?.(
         `[dsh-im:${this.#descriptor.key}] failed to process a command [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
       await this.#bot.sendText(target, messageFailureText(failure)).catch(() => undefined);
     }
@@ -653,6 +657,10 @@ export class TextHarnessBridge {
     const batchSubmission = message.batchSubmission;
     let stream = null;
     let semanticStream = false;
+    // Thinking streams accept the same delivery-block contract as semantic
+    // streams: finish() must receive { text, format } so a markdown answer
+    // renders rich instead of falling back to plain text.
+    let thinkingStream = false;
     // A keepalive heartbeat keeps short-lived carriers (e.g. Telegram's
     // private-chat Rich Draft) visible during long silent stretches such as a
     // running tool call. Declared outside the try so every exit path (including
@@ -723,29 +731,51 @@ export class TextHarnessBridge {
         this.#logger.warn?.(`[dsh-im:${this.#descriptor.key}] typing indicator failed:`, error);
       });
       let streamFinished = false;
-      if (typeof this.#bot.openDeliveryStream === 'function') {
+      if (this.#thinkingTraces && typeof this.#bot.openThinkingStream === 'function') {
         try {
-          stream = await this.#bot.openDeliveryStream(target);
-          semanticStream = true;
+          stream = await this.#bot.openThinkingStream(target);
+          thinkingStream = true;
         } catch (error) {
+          stream = null;
           this.#logger.warn?.(
-            `[dsh-im:${this.#descriptor.key}] unable to start a semantic reply stream; using final delivery:`,
-            error,
-          );
-        }
-      } else if (typeof this.#bot.openStream === 'function') {
-        try {
-          stream = await this.#bot.openStream(target);
-        } catch (error) {
-          this.#logger.warn?.(
-            `[dsh-im:${this.#descriptor.key}] unable to start a streamed reply; using text:`,
+            `[dsh-im:${this.#descriptor.key}] unable to start a thinking stream; using final delivery:`,
             error,
           );
         }
       }
+      if (!stream) {
+        if (typeof this.#bot.openDeliveryStream === 'function') {
+          try {
+            stream = await this.#bot.openDeliveryStream(target);
+            semanticStream = true;
+          } catch (error) {
+            this.#logger.warn?.(
+              `[dsh-im:${this.#descriptor.key}] unable to start a semantic reply stream; using final delivery:`,
+              error,
+            );
+          }
+        } else if (typeof this.#bot.openStream === 'function') {
+          try {
+            stream = await this.#bot.openStream(target);
+          } catch (error) {
+            this.#logger.warn?.(
+              `[dsh-im:${this.#descriptor.key}] unable to start a streamed reply; using text:`,
+              error,
+            );
+          }
+        }
+      }
+      const thinkingMode = Boolean(stream
+        && this.#thinkingTraces
+        && typeof stream.sendToolTrace === 'function');
+      // What the model sees. A message may carry two texts: `controlText`, the
+      // plain body the parsers read, and `content`, the same body decorated for
+      // the model — the email channel prefixes the mail headers there, so a
+      // subject-only instruction is not silently dropped. Falling back to the
+      // parsed text kept commands working but lost that decoration entirely.
       let content = hasImages || hasReply
-        ? await promptContentForInboundMessage(message, { signal: this.#signal })
-        : undefined;
+        ? await promptContentForInboundMessage(message, { signal: this.#signal, deferImages: true })
+        : cleanText(message.content) || undefined;
       const snapshot = this.#acceptedMessageIds.get(messageId);
       let contextEnhanced = false;
       if (snapshot) {
@@ -800,7 +830,24 @@ export class TextHarnessBridge {
           timeoutMs: this.#replyTimeoutMs,
           signal: this.#signal,
           control: { owner: this, key: conversationKey },
+          // Thinking mode needs every update (reasoning + tool calls) in
+          // order; latest mode filters as before. Only thinking mode subscribes
+          // to reasoning updates, so default-mode consumers on other channels
+          // never see them (their progress handlers would render update.text).
+          progressMode: thinkingMode ? 'all' : undefined,
+          reasoning: thinkingMode,
           onUpdate: stream ? async (update) => {
+            if (thinkingMode) {
+              // Only the 💭 and 🔧 lines are surfaced; status/text updates
+              // and the assistant-message canonical text are not.
+              if (update.type === 'reasoning') {
+                await stream.sendThinking(update.text);
+              } else if (update.type === 'tool') {
+                await stream.sendToolTrace(update.name, update.arguments);
+              }
+              return;
+            }
+            if (update.type === 'reasoning') return;
             const progress = update.type === 'text' ? update.text
               : update.type === 'tool' ? t('正在使用{name}…', { name: update.name }) : update.text;
             if (progress) {
@@ -824,6 +871,7 @@ export class TextHarnessBridge {
           },
           onInteractionResolved: (resolution) => this.#handleInteractionResolved(resolution),
           files: message.files,
+          images: message.images,
         },
       });
       stopKeepalive();
@@ -839,7 +887,7 @@ export class TextHarnessBridge {
       let textReceipt = null;
       if (stream) {
         try {
-          const result = await stream.finish(semanticStream
+          const result = await stream.finish(semanticStream || thinkingStream
             ? createTextDeliveryBlock(visibleAnswer, answerFormat)
             : visibleAnswer);
           streamFinished = true;
@@ -970,7 +1018,7 @@ export class TextHarnessBridge {
         : messageFailureText(failure);
       this.#logger.error?.(
         `[dsh-im:${this.#descriptor.key}] failed to process a message [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
       if (await presentStreamFailure(failureText)) {
         return error.deliveryReceipt;

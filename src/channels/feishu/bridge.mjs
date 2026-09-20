@@ -4063,7 +4063,7 @@ export class FeishuHarnessBridge {
     await Promise.allSettled(sessionIds.map((sessionId) => this.#scheduleCompensation(sessionId)));
   }
 
-  #interactionAskOptions(event, key, files) {
+  #interactionAskOptions(event, key, files, images) {
     return {
       timeoutMs: this.#replyTimeoutMs,
       signal: this.#signal,
@@ -4077,6 +4077,7 @@ export class FeishuHarnessBridge {
       }),
       onInteractionResolved: (resolution) => this.#handleInteractionResolved(resolution),
       files,
+      images,
     };
   }
 
@@ -4895,7 +4896,7 @@ export class FeishuHarnessBridge {
     // 的上下文增强按原样重放。直推分流发生在 `#answerWithStream` 构造之前，
     // 这里就是本回合唯一一次构造（无重复的 prompt 往返）。
     let content = hasInboundImages(message) || hasReplyReference(message)
-      ? await promptContentForInboundMessage(message, { signal: this.#signal })
+      ? await promptContentForInboundMessage(message, { signal: this.#signal, deferImages: true })
       : undefined;
     const snapshot = this.#acceptedMessageIds.get(messageId);
     let contextEnhanced = false;
@@ -4954,7 +4955,7 @@ export class FeishuHarnessBridge {
     // /stop 打标：回合进行中收到停止请求时，封存为「已停止」而非「已完成」。
     const stepStopFlag = streamingCard ? { requested: false } : null;
     if (streamingCard) this.#stepStopFlags.set(key, stepStopFlag);
-    const baseAskOptions = this.#interactionAskOptions(event, key, message.files);
+    const baseAskOptions = this.#interactionAskOptions(event, key, message.files, message.images);
 
     // 上下文注入动作在详细级别下也体现为一条步骤（注入细节可忽略）。
     // 不计入工具/助手消息的熔断计数（规格口径：熔断只管「工具 + 助手」）。
@@ -5241,7 +5242,7 @@ export class FeishuHarnessBridge {
       return this.#answerWithStepPush(event, key, message, { onAskComplete });
     }
     let content = hasInboundImages(message) || hasReplyReference(message)
-      ? await promptContentForInboundMessage(message, { signal: this.#signal })
+      ? await promptContentForInboundMessage(message, { signal: this.#signal, deferImages: true })
       : undefined;
     const snapshot = this.#acceptedMessageIds.get(messageId);
     let contextEnhanced = false;
@@ -5268,7 +5269,7 @@ export class FeishuHarnessBridge {
         contextEnhanced,
         createOptions: { signal: this.#signal },
         existsOptions: { signal: this.#signal },
-        askOptions: this.#interactionAskOptions(event, key, message.files),
+        askOptions: this.#interactionAskOptions(event, key, message.files, message.images),
       });
       markAskComplete();
       let textReceipt;
@@ -5312,7 +5313,7 @@ export class FeishuHarnessBridge {
       stream = await this.#channel.stream(chatId, {
         markdown: async (controller) => {
           promptStarted = true;
-          const baseAskOptions = this.#interactionAskOptions(event, key, message.files);
+          const baseAskOptions = this.#interactionAskOptions(event, key, message.files, message.images);
           const askOptions = {
             ...baseAskOptions,
             // issue #86：独立交互消息（提问/审批）会落在占位卡下方，呈现前
@@ -5421,7 +5422,7 @@ export class FeishuHarnessBridge {
         contextEnhanced,
         createOptions: { signal: this.#signal },
         existsOptions: { signal: this.#signal },
-        askOptions: this.#interactionAskOptions(event, key, message.files),
+        askOptions: this.#interactionAskOptions(event, key, message.files, message.images),
       });
       markAskComplete();
       let textReceipt;

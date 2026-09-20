@@ -1,3 +1,4 @@
+import { extractConnectionEvidence, createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { sendRememberedConnectionTest } from '../shared/connection-test.mjs';
 import {
   EmailApi,
@@ -199,8 +200,15 @@ export function normalizeEmail(parsed, { address, state } = {}) {
       // attachment type under any other key is silently dropped.
       ...(attachment.contentType ? { mediaType: String(attachment.contentType) } : {}),
       // The bridge streams files via a loader so large attachments are not
-      // held in memory until they are actually needed.
-      load: async () => attachment.content,
+      // held in memory until they are actually needed. Transports differ in
+      // what `content` is: IMAP hands over a Buffer (already fetched with the
+      // body), while the Agent mailbox can only fetch bytes on demand and so
+      // exposes a function. Returning that function unchanged made the loader
+      // resolve to a function, which the inbound-file layer rejects as
+      // `inbound-file-data-invalid` — the download never happened.
+      load: async () => (typeof attachment.content === 'function'
+        ? attachment.content()
+        : attachment.content),
     })),
     reactionTarget: null,
     replyTarget: {
@@ -308,6 +316,7 @@ export class EmailRuntime {
   #contextEnhancement;
   #accessPolicy;
   #logger;
+  #diagnostics;
   #replyTimeoutMs;
   #pollIntervalMs;
   // Current delay between polls; grows on failure and resets on success.
@@ -350,7 +359,7 @@ export class EmailRuntime {
     this.#state = state;
     this.#contextEnhancement = contextEnhancement;
     this.#accessPolicy = accessPolicy;
-    this.#logger = logger;
+    this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'email', logger });
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#pollIntervalMs = pollIntervalMs;
     this.#pollDelayMs = pollIntervalMs;
@@ -406,7 +415,7 @@ export class EmailRuntime {
     this.#status.connectionState = 'connecting';
     this.#abortController = new AbortController();
     try {
-      await this.#harness.ensureRunning();
+      await atConnectionStage('harness.check', () => this.#harness.ensureRunning());
       this.#status.harnessReachable = true;
       const api = this.#createApi({
         config: {
@@ -471,7 +480,8 @@ export class EmailRuntime {
     } catch (error) {
       this.#status.ready = false;
       this.#status.connectionState = 'failed';
-      this.#status.lastError = error.message;
+      this.#status.error = this.#diagnostics.report(error, { operation: 'connection.monitor', botId: this.#config?.botId, automatic: true }).publicError;
+      this.#status.lastError = this.#status.error.message;
       await this.stop();
       throw error;
     }
@@ -514,7 +524,7 @@ export class EmailRuntime {
       .catch((error) => {
         if (this.#stopped) return;
         this.#status.lastMessageError = this.#safeMessageError(error);
-        this.#logger.warn?.('[dsh-im:email] delivery failed', error);
+        this.#logger.warn?.('[dsh-im:email] delivery failed', extractConnectionEvidence(error).details);
       })
       .finally(() => { this.#deliveries.delete(task); });
     this.#deliveries.add(task);
@@ -646,14 +656,15 @@ export class EmailRuntime {
         }
       }
       this.#status.lastCheckedAt = Date.now();
-      this.#status.lastError = null;
+      this.#status.lastError = null; this.#status.error = null; this.#diagnostics.clear();
       // A poll that works is the proof the mailbox is reachable.
       this.#status.connectionState = 'connected';
       this.#consecutivePollFailures = 0;
       this.#pollDelayMs = this.#pollIntervalMs;
     } catch (error) {
       if (!this.#stopped) {
-        this.#status.lastError = error.message;
+        this.#status.error = this.#diagnostics.report(error, { operation: 'connection.monitor', botId: this.#config?.botId, automatic: true }).publicError;
+        this.#status.lastError = this.#status.error.message;
         // A failing poll means the mailbox is NOT usable, even though the
         // transport opened; leaving this as "connected" reported a healthy
         // channel while no mail could be read at all.
@@ -672,11 +683,7 @@ export class EmailRuntime {
         this.#status.retryAt = Date.now() + this.#pollDelayMs;
         if (limited) this.#status.rateLimited = true;
 
-        this.#logger.warn?.(
-          `[dsh-im:email] polling failed${limited ? ' (rate limited)' : ''}; `
-          + `retrying in ${Math.round(this.#pollDelayMs / 1000)}s`,
-          error,
-        );
+
       }
     }
   }
