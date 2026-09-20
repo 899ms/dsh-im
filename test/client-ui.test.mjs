@@ -2133,10 +2133,19 @@ test('the email entry point stays hidden while the Host reports the channel clos
   });
   assert.equal(hasMailbox(), false,
     'an explicit closed answer also hides the entry point');
+  const { registerManagementRpc } = await import('../plugin-src/management-rpc.mjs');
+  const { managementFetch } = await import('./fixtures/management-rpc.mjs');
+  let emailRpcCall;
+  registerManagementRpc({
+    connection: { fetch: managementFetch((_channel, handler) => { emailRpcCall = handler; }) },
+  }, '/email', async (endpoint) => {
+    assert.equal(endpoint, 'channel.availability');
+    return { ok: true, value: { enabled: true } };
+  });
   await TestRenderer.act(async () => {
     renderer = TestRenderer.create(React.createElement(IMSettingsTab, {
       ...rpcCalls,
-      emailRpcCall: async () => ({ ok: true, value: { enabled: true } }),
+      emailRpcCall,
     }));
   });
   assert.equal(hasMailbox(), true,

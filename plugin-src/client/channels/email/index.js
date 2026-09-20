@@ -715,7 +715,7 @@ export function useEmailChannelEnabled(rpcCall) {
     if (typeof rpcCall !== 'function') return undefined;
     let active = true;
     Promise.resolve()
-      .then(() => rpcCall(EMAIL_ENDPOINTS.availability))
+      .then(() => rpcCall(EMAIL_ENDPOINTS.availability, {}))
       .then((result) => {
         if (!active) return;
         const value = result?.ok === false ? null : (result?.value ?? result);
