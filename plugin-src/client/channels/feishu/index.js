@@ -1,3 +1,4 @@
+import { ConnectionError, normalizeConnectionError } from '../../connection-error.js';
 import { BotName } from '../../bot-alias.js';
 import * as React from "react";
 
@@ -396,7 +397,7 @@ function ProvisionError({ error, provision, onRetry, onCancel, busy }) {
         h("h3", null, repairing
           ? "权限与回调没有补全完成"
           : grantingGroupMessages ? "群消息权限没有开通完成" : "新机器人没有添加完成"),
-        h("p", null, error.message),
+        h(ConnectionError, { error: error }),
         error.code ? h("span", { className: "bxf-errorCode" }, error.code) : null,
         h("div", { className: "bxf-actions dim-viewActions" },
           h(Button, { kind: "primary", onClick: onRetry, disabled: busy },
@@ -700,6 +701,7 @@ export function BotCard({
             }, "移除接入")),
           summary ? h("div", { className: "bxf-healthSummary dim-cardSummary", "data-error": actionError || connection.error ? "true" : undefined },
             summary) : null,
+          (actionError || connection.error) ? h(ConnectionError, { error: actionError || connection.error, showMessage: false }) : null,
           connection.lastMessageError ? h(LastMessageErrorSummary, {
             className: "bxf-healthSummary",
             error: connection.lastMessageError,
@@ -770,7 +772,7 @@ function PageError({ error, onRetry, busy }) {
     h("div", { className: "bxf-error dim-inlineError", role: "alert" },
       h("div", null,
         h("h3", null, "无法读取飞书机器人"),
-        h("p", null, error.message),
+        h(ConnectionError, { error: error }),
         error.code ? h("span", { className: "bxf-errorCode" }, error.code) : null,
         h("div", { className: "bxf-actions dim-viewActions" },
           h(Button, { kind: "primary", onClick: onRetry, disabled: busy },
@@ -812,6 +814,7 @@ export function mergeFeishuSnapshotState(
 }
 
 export function FeishuSettingsTab({ rpcCall }) {
+  const [operationError, setOperationError] = React.useState(null);
   const [model, setModel] = React.useState({
     phase: "loading",
     revision: 0,
@@ -857,7 +860,16 @@ export function FeishuSettingsTab({ rpcCall }) {
   }, [scheduleAnimationFrame]);
 
   const invoke = React.useCallback(async (endpoint, payload = {}, signal) => {
-    return unwrapRpcResult(await rpcCall(endpoint, payload, signal));
+    const operation = !['connection.status', 'provision.poll', 'provision.begin', 'provision.cancel'].includes(endpoint);
+    if (operation && mountedRef.current) setOperationError(null);
+    try {
+      const value = unwrapRpcResult(await rpcCall(endpoint, payload, signal));
+      if (operation && mountedRef.current) setOperationError(value?.testMessage?.error ?? value?.warnings?.[0] ?? null);
+      return value;
+    } catch (error) {
+      if (endpoint === 'bot.delete' && mountedRef.current && !signal?.aborted && error?.name !== 'AbortError') setOperationError(normalizeConnectionError(error));
+      throw error;
+    }
   }, [rpcCall]);
 
   const mergeSnapshot = React.useCallback((snapshot, { restoreProvisioning = false } = {}) => {
@@ -1490,6 +1502,7 @@ export function FeishuSettingsTab({ rpcCall }) {
   }, h(AgentPresetCatalogContext.Provider, {
     value: model.agentPresetCatalog ?? EMPTY_AGENT_PRESET_CATALOG,
   }, h("section", { className: "bxf-page dim-channelPage", "aria-label": "飞书机器人设置" },
+    operationError ? h(ConnectionError, { error: operationError }) : null,
     h(Heading, {
       totals: model.totals,
       onAdd: () => void startProvisioning(),

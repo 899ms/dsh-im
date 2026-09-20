@@ -1,3 +1,4 @@
+import { assertTestMessageFailure } from '../../fixtures/connection-diagnostics.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -1742,10 +1743,7 @@ test('WhatsApp reconnect RPC sends tests only for the connected target and keeps
     { botId, sendTest: true },
   );
   assert.equal(failedSend.ok, true);
-  assert.deepEqual(failedSend.value.testMessage, {
-    sent: false,
-    code: 'test-message-failed',
-  });
+  assertTestMessageFailure(failedSend.value.testMessage);
   assert.doesNotMatch(JSON.stringify(failedSend), /private provider failure/);
 
   connected = false;

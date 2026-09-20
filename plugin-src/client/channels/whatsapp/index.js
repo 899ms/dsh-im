@@ -1,3 +1,4 @@
+import { ConnectionError, normalizeConnectionError } from '../../connection-error.js';
 import { BotName } from '../../bot-alias.js';
 import * as React from 'react';
 
@@ -168,7 +169,7 @@ export function ProvisionView({ provision, busy, onRetry, onClose }) {
   return h('div', { className: 'ddt-card dim-surfaceCard' },
     h('div', { className: 'ddt-inlineError dim-inlineError', role: 'alert' },
       h('h3', null, 'WhatsApp 没有接入完成'),
-      h('p', null, error.message),
+      h(ConnectionError, { error: error }),
       h('span', { className: 'ddt-errorCode' }, error.code),
       h('div', { className: 'ddt-actions dim-viewActions' },
         h(Button, { kind: 'primary', onClick: onRetry, disabled: busy }, '重新生成二维码'),
@@ -268,6 +269,7 @@ export function WhatsappAccountCard({
               className: 'dim-cardAction', kind: 'danger', onClick: onRequestRemove, disabled: Boolean(busy),
             }, '移除接入')),
           summary ? h('div', { className: 'ddt-summary dim-cardSummary' }, summary) : null,
+          account.error ? h(ConnectionError, { error: account.error, showMessage: false }) : null,
           account.lastMessageError ? h(LastMessageErrorSummary, {
             className: 'ddt-summary',
             error: account.lastMessageError,
@@ -287,6 +289,7 @@ export function WhatsappAccountCard({
 }
 
 export function WhatsappSettingsTab({ rpcCall }) {
+  const [operationError, setOperationError] = React.useState(null);
   const [model, setModel] = React.useState({
     phase: 'loading', bots: [], totals: { configured: 0, connected: 0 }, error: null,
     agentPresetCatalog: EMPTY_AGENT_PRESET_CATALOG,
@@ -315,7 +318,16 @@ export function WhatsappSettingsTab({ rpcCall }) {
 
   const invoke = React.useCallback(async (endpoint, payload = {}, signal) => {
     if (typeof rpcCall !== 'function') throw new TypeError('WhatsApp 设置页缺少 RPC 连接');
-    return unwrapRpcResult(await rpcCall(endpoint, payload, signal));
+    const operation = !['connection.status', 'provision.poll', 'provision.begin', 'provision.cancel'].includes(endpoint);
+      if (operation && mounted.current) setOperationError(null);
+      try {
+        const value = unwrapRpcResult(await rpcCall(endpoint, payload, signal));
+        if (operation && mounted.current) setOperationError(value?.testMessage?.error ?? value?.warnings?.[0] ?? null);
+        return value;
+      } catch (error) {
+        if (operation && mounted.current && !signal?.aborted && error?.name !== 'AbortError') setOperationError(normalizeConnectionError(error));
+        throw error;
+      }
   }, [rpcCall]);
 
   const loadStatus = React.useCallback(async ({ signal, silent = false, restore = false } = {}) => {
@@ -558,6 +570,7 @@ export function WhatsappSettingsTab({ rpcCall }) {
     className: 'ddt-page dwa-page dim-channelPage',
     'aria-label': 'WhatsApp 设置',
   },
+    operationError ? h(ConnectionError, { error: operationError }) : null,
   h(Heading, {
     totals: model.totals,
     busy,
@@ -570,7 +583,7 @@ export function WhatsappSettingsTab({ rpcCall }) {
       ? h('div', { className: 'ddt-card dim-surfaceCard' },
           h('div', { className: 'ddt-inlineError dim-inlineError' },
             h('h3', null, '无法读取 WhatsApp 机器人状态'),
-            h('p', null, model.error?.message),
+            h(ConnectionError, { error: model.error }),
             h(Button, { onClick: () => void loadStatus() }, '重新读取')))
       : h(React.Fragment, null,
           provision?.status === 'pending'

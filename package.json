@@ -1,6 +1,6 @@
 {
   "name": "@xmanrui/dsh-im",
-  "version": "4.22.0",
+  "version": "4.23.0",
   "description": "把十一种 IM 渠道和公网 AI Office 接入本机 DeepSeek Harness。 Connect eleven IM channels and a public AI Office to a local DeepSeek Harness.",
   "keywords": [
     "deepseek-harness",
@@ -184,6 +184,7 @@
     "test": "test"
   },
   "optionalDependencies": {
-    "@tencent-qqmail/agently-cli": "^1.0.18"
+    "@tencent-qqmail/agently-cli": "^1.0.18",
+    "sharp": "0.35.4"
   }
 }

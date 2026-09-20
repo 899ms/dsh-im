@@ -1,3 +1,4 @@
+import { loadDeferredImages } from '../../helpers/deferred-images.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -459,7 +460,8 @@ test('QQ sends image-only attachments to Harness and accepts the SDK file MIME f
     ownerUserOpenid: 'owner-openid',
     harness: {
       sessionExists: async () => true,
-      ask: async (sessionId, content) => {
+      ask: async (sessionId, content, options) => {
+        content = await loadDeferredImages(content, options);
         prompts.push({ sessionId, content });
         return '看到图片了';
       },
@@ -612,7 +614,7 @@ test('QQ rejects non-platform image URLs without fetching and returns a retryabl
     ownerUserOpenid: 'owner-openid',
     harness: {
       sessionExists: async () => true,
-      ask: async () => assert.fail('an untrusted image must not reach Harness'),
+      ask: async (_sessionId, content, options) => { await loadDeferredImages(content, options); assert.fail('invalid images must not reach the model'); },
     },
     state: fixture.state,
     logger: { error() {} },

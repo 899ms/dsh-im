@@ -1,3 +1,4 @@
+import { extractConnectionEvidence, createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { randomInt } from 'node:crypto';
 
 import { createEditableMessageStream, splitMessageText } from '../shared/editable-message-stream.mjs';
@@ -451,7 +452,7 @@ class TelegramDeliveryStream {
       try {
         return await this.#update(block);
       } catch (error) {
-        this.#logger.warn?.('[dsh-im:telegram] rich stream update failed:', error);
+        this.#logger.warn?.('[dsh-im:telegram] rich stream update failed:', extractConnectionEvidence(error).details);
         return undefined;
       }
     });
@@ -467,7 +468,7 @@ class TelegramDeliveryStream {
       try {
         return await this.#update(this.#lastBlock);
       } catch (error) {
-        this.#logger.warn?.('[dsh-im:telegram] rich stream refresh failed:', error);
+        this.#logger.warn?.('[dsh-im:telegram] rich stream refresh failed:', extractConnectionEvidence(error).details);
         return undefined;
       }
     });
@@ -926,6 +927,7 @@ export class TelegramRuntime {
   #contextEnhancement;
   #accessPolicy;
   #logger;
+  #diagnostics;
   #replyTimeoutMs;
   #createApi;
   #createHttpTransport;
@@ -968,7 +970,7 @@ export class TelegramRuntime {
     this.#state = state;
     this.#contextEnhancement = contextEnhancement;
     this.#accessPolicy = accessPolicy;
-    this.#logger = logger;
+    this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'telegram', logger });
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#createApi = createApi;
     this.#createHttpTransport = createHttpTransport;
@@ -1026,8 +1028,8 @@ export class TelegramRuntime {
     this.#connecting = true;
     this.#status.startedAt = new Date().toISOString();
     this.#status.connectionState = 'connecting';
-    this.#status.lastError = null;
-    await this.#harness.ensureRunning();
+    this.#status.lastError = null; this.#status.error = null; this.#diagnostics.clear();
+    await atConnectionStage('harness.check', () => this.#harness.ensureRunning());
     this.#status.harnessReachable = true;
 
     const controller = new AbortController();
@@ -1057,7 +1059,7 @@ export class TelegramRuntime {
       } catch (error) {
         this.#logger.warn?.(
           `[dsh-im:telegram] bot ${this.#config.botId} command menu setup failed:`,
-          error,
+          extractConnectionEvidence(error).details,
         );
       }
       const client = new TelegramBotClient({
@@ -1099,7 +1101,7 @@ export class TelegramRuntime {
         } catch (error) {
           this.#logger.warn?.(
             `[dsh-im:telegram] bot ${this.#config.botId} command menu catch-up failed:`,
-            error,
+            extractConnectionEvidence(error).details,
           );
         }
       }
@@ -1108,14 +1110,16 @@ export class TelegramRuntime {
         if (controller.signal.aborted) return;
         this.#status.ready = false;
         this.#status.connectionState = 'failed';
-        this.#status.lastError = error?.message ?? String(error);
-        this.#logger.error?.(`[dsh-im:telegram] bot ${this.#config.botId} polling stopped:`, error);
+        this.#status.error = this.#diagnostics.report(error, { operation: 'connection.monitor', botId: this.#config?.botId, automatic: true }).publicError;
+        this.#status.lastError = this.#status.error.message;
+
       });
       return this.status;
     } catch (error) {
       this.#status.ready = false;
       this.#status.connectionState = 'failed';
-      this.#status.lastError = error?.message ?? String(error);
+      this.#status.error = this.#diagnostics.report(error, { operation: 'connection.restore', reuse: true, botId: this.#config?.botId, automatic: true }).publicError;
+      this.#status.lastError = this.#status.error.message;
       await this.stop();
       throw error;
     } finally {
@@ -1160,7 +1164,7 @@ export class TelegramRuntime {
     } catch (error) {
       this.#logger.warn?.(
         `[dsh-im:telegram] bot ${this.#config.botId} command menu refresh failed:`,
-        error,
+        extractConnectionEvidence(error).details,
       );
       return false;
     }
@@ -1210,7 +1214,7 @@ export class TelegramRuntime {
               if (signal.aborted) return;
               this.#logger.error?.(
                 `[dsh-im:telegram] bot ${this.#config.botId} callback handling failed:`,
-                error,
+                extractConnectionEvidence(error).details,
               );
             });
           }
@@ -1230,7 +1234,7 @@ export class TelegramRuntime {
             if (signal.aborted) return;
             this.#logger.error?.(
               `[dsh-im:telegram] bot ${this.#config.botId} message handling failed:`,
-              error,
+              extractConnectionEvidence(error).details,
             );
           });
         }

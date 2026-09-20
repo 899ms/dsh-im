@@ -64,6 +64,7 @@ import {
   providerMessageIdsFor,
 } from './semantic/delivery.mjs';
 import {
+  messageFailureDiagnostic,
   channelDeliveryFailure,
   clearLastMessageFailure,
   messageFailureText,
@@ -475,7 +476,7 @@ export class TextHarnessBridge {
       const failure = setLastMessageFailure(this.#status, error);
       this.#logger.error?.(
         `[dsh-im:${this.#descriptor.key}] failed to process a batch input message [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
     }).finally(() => {
       this.#acceptedMessageIds.delete(messageId);
@@ -584,7 +585,7 @@ export class TextHarnessBridge {
       const failure = setLastMessageFailure(this.#status, error);
       this.#logger.error?.(
         `[dsh-im:${this.#descriptor.key}] failed to process a command [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
       await this.#bot.sendText(target, messageFailureText(failure)).catch(() => undefined);
     }
@@ -749,7 +750,7 @@ export class TextHarnessBridge {
       // subject-only instruction is not silently dropped. Falling back to the
       // parsed text kept commands working but lost that decoration entirely.
       let content = hasImages || hasReply
-        ? await promptContentForInboundMessage(message, { signal: this.#signal })
+        ? await promptContentForInboundMessage(message, { signal: this.#signal, deferImages: true })
         : cleanText(message.content) || undefined;
       const snapshot = this.#acceptedMessageIds.get(messageId);
       let contextEnhanced = false;
@@ -829,6 +830,7 @@ export class TextHarnessBridge {
           },
           onInteractionResolved: (resolution) => this.#handleInteractionResolved(resolution),
           files: message.files,
+          images: message.images,
         },
       });
       stopKeepalive();
@@ -975,7 +977,7 @@ export class TextHarnessBridge {
         : messageFailureText(failure);
       this.#logger.error?.(
         `[dsh-im:${this.#descriptor.key}] failed to process a message [${failure.referenceId}]:`,
-        error,
+        messageFailureDiagnostic(error, failure),
       );
       if (await presentStreamFailure(failureText)) {
         return error.deliveryReceipt;

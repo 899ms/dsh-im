@@ -1,3 +1,4 @@
+import { ConnectionError } from './connection-error.js';
 import * as React from 'react';
 
 import { h, isEnglish } from './i18n.js';
@@ -124,6 +125,7 @@ export function LastMessageErrorSummary({ className = '', error }) {
   h('strong', null, '最近一条消息处理失败'),
   '：',
   h('span', null, error.message),
+    error.details ? h(ConnectionError, { error, showMessage: false }) : null,
   '（',
   h('span', null, '错误码'),
   ` ${error.code} · `,

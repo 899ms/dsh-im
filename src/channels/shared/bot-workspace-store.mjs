@@ -1,3 +1,5 @@
+import { t } from './i18n.mjs';
+import { atConnectionStage, connectionStageError, extractConnectionEvidence } from './connection-error.mjs';
 import { validateBotAlias, withBotAlias } from './bot-alias.mjs';
 import { defaultImWorkspace, sameWorkspacePath } from './default-workspace.mjs';
 import {
@@ -1475,7 +1477,10 @@ export function observeBotWorkspaceRemovals(
         return async (...args) => {
           const removed = await value.apply(target, args);
           const botId = removed ? botIdFromRemoved(removed, args) : null;
-          if (botId) await workspaces.retireAfterConfigCommit(botId);
+          if (botId) {
+            const cleanup = await atConnectionStage('workspace.cleanup', () => workspaces.retireAfterConfigCommit(botId), 'workspace-config');
+            if (cleanup?.error) throw connectionStageError(cleanup.error, 'workspace.cleanup', 'workspace-config');
+          }
           return removed;
         };
       }
@@ -2279,6 +2284,17 @@ export function createWorkspaceAwareController(controller, {
     });
   };
   const deleteWithWorkspace = (botId, invokeDelete) => withBotTransition(botId, async () => {
+    const warnings = [];
+    const cleanupWarning = (error, stage = 'workspace.cleanup') => {
+      if (!controller.diagnostics) return;
+      warnings.push(controller.diagnostics.report(error, { operation: 'bot.delete', stage, botId, warning: true,
+        publicError: { code: 'workspace-cleanup-failed', message: stage === 'state.cleanup'
+          ? t('本地会话状态清理失败，请查看诊断详情。') : t('账号已移除，但本地状态清理失败。') } }).publicError);
+    };
+    const finishRemoval = async () => {
+      const outcome = await workspaces.finishRemoval(removal);
+      if (outcome?.error) cleanupWarning(outcome.error);
+    };
     // Fence the old runtime without changing the durable mapping. A crash
     // before the controller removes its config therefore keeps the bot's
     // workspace, while a crash after that commit is healed by startup
@@ -2292,24 +2308,27 @@ export function createWorkspaceAwareController(controller, {
           }
           await state.clearSessions();
         } catch (error) {
-          console.warn(
-            '[dsh-im] ignored session cleanup failure while deleting bot:',
-            botId,
-            error?.message ?? error,
-          );
+          if (controller.diagnostics) cleanupWarning(error, 'state.cleanup');
+          else console.warn('[dsh-im] ignored session cleanup failure while deleting bot:', extractConnectionEvidence(error).details);
         }
       },
     });
     try {
       const result = await invokeDelete();
-      await workspaces.finishRemoval(removal);
-      return decorate(result);
+      await finishRemoval();
+      return decorate({ ...result, ...(warnings.length ? { warnings: [...(result?.warnings ?? []), ...warnings] } : {}) });
     } catch (error) {
       const after = await targetStatus(controller).catch(() => null);
       const knownAbsent = Array.isArray(after?.bots)
         && !after.bots.some((bot) => bot?.botId === botId);
-      if (knownAbsent) await workspaces.finishRemoval(removal);
-      else await workspaces.abortRemoval(removal);
+      if (knownAbsent) {
+        if (controller.diagnostics) {
+          cleanupWarning(error);
+          try { await finishRemoval(); } catch (cleanupError) { cleanupWarning(cleanupError); }
+          return decorate({ ...after, warnings });
+        }
+        await workspaces.finishRemoval(removal);
+      } else await workspaces.abortRemoval(removal);
       throw error;
     }
   });

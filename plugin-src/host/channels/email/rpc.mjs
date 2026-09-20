@@ -1,3 +1,4 @@
+import { createConnectionDiagnostics, diagnosticRpcResult } from '../../../../src/channels/shared/connection-error.mjs';
 import { createTokenBotRpcHandler } from '../shared/rpc.mjs';
 import { registerManagementRpc } from '../../../management-rpc.mjs';
 import { resolveRpcAuthority } from '../../rpc-authority.mjs';
@@ -59,6 +60,7 @@ function withRpcDetails(result) {
  * payload shapes.
  */
 export function createEmailRpcHandler(controller) {
+  const diagnostics = controller.diagnostics ?? createConnectionDiagnostics({ channel: 'email' });
   // Availability is answered before anything else, including the controller
   // shape check: the client asks this endpoint to decide whether to show the
   // mailbox entry point at all, so it must work even while the channel is
@@ -79,49 +81,49 @@ export function createEmailRpcHandler(controller) {
       try {
         return { ok: true, value: await controller.bindMailbox(payload ?? {}) };
       } catch (error) {
-        return withRpcDetails({
+        return diagnosticRpcResult(diagnostics, error, withRpcDetails({
           ok: false,
           error: {
             code: error?.code ?? 'email-bind-failed',
             message: error?.message ?? String(error),
             details: error?.details ?? {},
           },
-        });
+        }), { operation: endpoint, botId: payload?.botId, untrustedPublicError: true });
       }
     }
     if (endpoint === EMAIL_ENDPOINTS.startAuth) {
       try {
         return { ok: true, value: await controller.startAuthorization(payload ?? {}) };
       } catch (error) {
-        return failure('email-auth-failed', error);
+        return diagnosticRpcResult(diagnostics, error, failure('email-auth-failed', error), { operation: endpoint, botId: payload?.botId, untrustedPublicError: true });
       }
     }
     if (endpoint === EMAIL_ENDPOINTS.pollAuth) {
       try {
         return { ok: true, value: await controller.pollAuthorization(payload ?? {}) };
       } catch (error) {
-        return failure('email-auth-failed', error);
+        return diagnosticRpcResult(diagnostics, error, failure('email-auth-failed', error), { operation: endpoint, botId: payload?.botId, untrustedPublicError: true });
       }
     }
     if (endpoint === EMAIL_ENDPOINTS.getBinding) {
       try {
         return { ok: true, value: await controller.getSessionBinding(payload?.botId) };
       } catch (error) {
-        return failure('email-binding-failed', error);
+        return diagnosticRpcResult(diagnostics, error, failure('email-binding-failed', error), { operation: endpoint, botId: payload?.botId, untrustedPublicError: true });
       }
     }
     if (endpoint === EMAIL_ENDPOINTS.setBinding) {
       try {
         return { ok: true, value: await controller.setSessionBinding(payload?.botId, payload ?? {}) };
       } catch (error) {
-        return failure('email-binding-failed', error);
+        return diagnosticRpcResult(diagnostics, error, failure('email-binding-failed', error), { operation: endpoint, botId: payload?.botId, untrustedPublicError: true });
       }
     }
     if (endpoint === EMAIL_ENDPOINTS.listSessions) {
       try {
         return { ok: true, value: await controller.listSessions(payload?.botId) };
       } catch (error) {
-        return failure('email-sessions-failed', error);
+        return diagnosticRpcResult(diagnostics, error, failure('email-sessions-failed', error), { operation: endpoint, botId: payload?.botId, untrustedPublicError: true });
       }
     }
     if (endpoint === EMAIL_ENDPOINTS.updateMailbox) {
@@ -137,14 +139,14 @@ export function createEmailRpcHandler(controller) {
           ),
         };
       } catch (error) {
-        return withRpcDetails({
+        return diagnosticRpcResult(diagnostics, error, withRpcDetails({
           ok: false,
           error: {
             code: error?.code ?? 'email-update-failed',
             message: error?.message ?? String(error),
             details: error?.details ?? {},
           },
-        });
+        }), { operation: endpoint, botId: payload?.botId, untrustedPublicError: true });
       }
     }
     return withRpcDetails(await shared(endpoint, payload, signal));
