@@ -745,7 +745,7 @@ export class TextHarnessBridge {
         }
       }
       let content = hasImages || hasReply
-        ? await promptContentForInboundMessage(message, { signal: this.#signal })
+        ? await promptContentForInboundMessage(message, { signal: this.#signal, deferImages: true })
         : undefined;
       const snapshot = this.#acceptedMessageIds.get(messageId);
       let contextEnhanced = false;
@@ -825,6 +825,7 @@ export class TextHarnessBridge {
           },
           onInteractionResolved: (resolution) => this.#handleInteractionResolved(resolution),
           files: message.files,
+          images: message.images,
         },
       });
       stopKeepalive();

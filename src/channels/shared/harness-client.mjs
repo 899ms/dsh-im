@@ -15,6 +15,8 @@ import {
   imageFileSourcesFromContent,
   isModelImageRejection,
 } from './image-prompt.mjs';
+import { imageInputLimits } from './image-input-policy.mjs';
+import { inboundImagesAsFiles, imageContentFromStaged, isImageAdmissionRejection, IMAGE_HOST_LIMIT_FALLBACK_PROMPT } from './image-input.mjs';
 import { imSourceGuidance } from './im-source-guidance.mjs';
 import { outboundArtifactRegistry } from './semantic/artifact.mjs';
 import { t } from './i18n.mjs';
@@ -731,6 +733,7 @@ export class HarnessClient {
   #controlExecutor;
   #sessionMaintenanceExecutor;
   #fileIngressExecutor;
+  #imageInputPolicy;
   #managedProcess = null;
   #interactionRegistry;
   #interactionOwnerships;
@@ -755,6 +758,7 @@ export class HarnessClient {
     controlExecutor,
     sessionMaintenanceExecutor,
     fileIngressExecutor,
+    imageInputPolicy = () => undefined,
   }) {
     if (typeof createWebSocket !== 'function') {
       throw new TypeError('createWebSocket must be a function');
@@ -806,6 +810,7 @@ export class HarnessClient {
     this.#controlExecutor = controlExecutor;
     this.#sessionMaintenanceExecutor = sessionMaintenanceExecutor;
     this.#fileIngressExecutor = fileIngressExecutor;
+    this.#imageInputPolicy = imageInputPolicy;
     this.#interactionRegistry = interactionRegistry(this.#baseUrl?.origin ?? interactionScope);
     this.#interactionOwnerships = this.#interactionRegistry.ownerships;
     this.#interactionClaims = this.#interactionRegistry.claims;
@@ -1435,6 +1440,10 @@ export class HarnessClient {
     });
   }
 
+  async getImageInputLimits() {
+    return imageInputLimits(await this.#imageInputPolicy());
+  }
+
   async ask(sessionId, prompt, options = {}) {
     if (typeof options === 'number') options = { timeoutMs: options };
     const timeoutMs = options.timeoutMs ?? 600_000;
@@ -1450,6 +1459,7 @@ export class HarnessClient {
       : undefined;
     const control = normalizeControl(options.control);
     const inboundFiles = Array.isArray(options.files) ? options.files.filter(Boolean) : [];
+    const inboundImages = Array.isArray(options.images) ? options.images.filter(Boolean) : [];
     await this.ensureRunning({ signal });
     const before = await this.rpc(
       'session.history',
@@ -1531,6 +1541,26 @@ export class HarnessClient {
         stagedBatches.push(staged);
         prompt = appendInboundFilesToPrompt(prompt, staged);
       }
+      if (inboundImages.length > 0) {
+        const limits = await this.getImageInputLimits();
+        const sources = inboundImagesAsFiles(inboundImages, limits);
+        let staged;
+        try {
+          staged = await this.#stageWorkspaceFiles(sessionId, sources, signal);
+        } catch (error) {
+          // Ingress wraps loader errors; retain the original image diagnostic.
+          if (signal?.aborted) throw signal.reason ?? error;
+          if (error?.cause?.name === 'ImagePromptError') throw error.cause;
+          throw error;
+        }
+        stagedBatches.push(staged);
+        const images = await imageContentFromStaged(staged, limits, { signal });
+        const originalContent = typeof basePrompt === 'string'
+          ? [{ type: 'text', text: basePrompt }] : basePrompt;
+        prompt = appendInboundFilesToPrompt([...originalContent, ...images], {
+          files: stagedBatches.flatMap((batch) => batch.files),
+        });
+      }
       if (interactionSignal) {
         let markOpen;
         const opened = new Promise((resolve) => { markOpen = resolve; });
@@ -1578,29 +1608,32 @@ export class HarnessClient {
         // Session workspace and named in a text manifest — then retry once
         // with a text-only prompt. The retry reuses promptRpcId so reply
         // tracking, control and interaction ownership stay bound to this ask.
-        const imageSources = isModelImageRejection(error)
-          ? imageFileSourcesFromContent(content)
-          : [];
-        if (imageSources.length === 0) throw error;
-        let stagedImages;
-        try {
-          stagedImages = await this.#stageWorkspaceFiles(sessionId, imageSources, signal);
-        } catch (stagingError) {
-          if (signal?.aborted) throw signal.reason ?? stagingError;
-          console.warn(
-            '[dsh-im] unable to restage rejected images as workspace files:',
-            this.#logPrefix,
-            stagingError?.message ?? String(stagingError),
-          );
-          throw error;
+        const originalsStaged = inboundImages.length > 0 && isImageAdmissionRejection(error)
+          && content.some((part) => part.type === 'image');
+        const imageSources = !originalsStaged && isModelImageRejection(error)
+          ? imageFileSourcesFromContent(content) : [];
+        if (!originalsStaged && imageSources.length === 0) throw error;
+        if (!originalsStaged) {
+          let stagedImages;
+          try {
+            stagedImages = await this.#stageWorkspaceFiles(sessionId, imageSources, signal);
+          } catch (stagingError) {
+            if (signal?.aborted) throw signal.reason ?? stagingError;
+            console.warn(
+              '[dsh-im] unable to restage rejected images as workspace files:',
+              this.#logPrefix,
+              stagingError?.message ?? String(stagingError),
+            );
+            throw error;
+          }
+          stagedBatches.push(stagedImages);
         }
-        stagedBatches.push(stagedImages);
         const baseContent = typeof basePrompt === 'string'
           ? [{ type: 'text', text: basePrompt }]
           : basePrompt;
         const fallbackPrompt = appendInboundFilesToPrompt([
           ...contentWithoutImages(baseContent),
-          { type: 'text', text: t(IMAGE_FILE_FALLBACK_PROMPT) },
+          { type: 'text', text: t(isModelImageRejection(error) ? IMAGE_FILE_FALLBACK_PROMPT : IMAGE_HOST_LIMIT_FALLBACK_PROMPT) },
         ], { files: stagedBatches.flatMap((batch) => batch?.files ?? []) });
         await sendPrompt(fallbackPrompt);
       }

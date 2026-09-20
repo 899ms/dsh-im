@@ -1,3 +1,4 @@
+import { loadDeferredImages } from '../../helpers/deferred-images.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
@@ -1010,7 +1011,8 @@ test('bridge downloads an inbound Feishu image once and submits structured Harne
     channel: {},
     harness: {
       sessionExists: async () => true,
-      ask: async (sessionId, content) => {
+      ask: async (sessionId, content, options) => {
+        content = await loadDeferredImages(content, options);
         asked.push({ sessionId, content });
         return '看到了一张图片';
       },
@@ -1335,7 +1337,7 @@ test('bridge tells users to grant im:message:readonly when Feishu rejects image 
     channel: {},
     harness: {
       sessionExists: async () => true,
-      ask: async () => assert.fail('permission failures must not reach Harness'),
+      ask: async (_sessionId, content, options) => { await loadDeferredImages(content, options); assert.fail('invalid images must not reach the model'); },
     },
     state: fixture.state,
     status: bridgeStatus(),
@@ -1382,7 +1384,8 @@ test('bridge sends Feishu post text and all embedded images as one structured pr
     channel: {},
     harness: {
       sessionExists: async () => true,
-      ask: async (sessionId, content) => {
+      ask: async (sessionId, content, options) => {
+        content = await loadDeferredImages(content, options);
         asked.push({ sessionId, content });
         return '两张图片都已收到';
       },

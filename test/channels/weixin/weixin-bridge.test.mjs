@@ -1,3 +1,4 @@
+import { loadDeferredImages } from '../../helpers/deferred-images.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -807,7 +808,8 @@ test('Weixin sends image-only messages to Harness as structured content', async 
     ownerUserId: 'owner-user',
     harness: {
       sessionExists: async () => true,
-      ask: async (sessionId, content) => {
+      ask: async (sessionId, content, options) => {
+        content = await loadDeferredImages(content, options);
         prompts.push({ sessionId, content });
         return '微信图片已识别';
       },
@@ -930,7 +932,7 @@ test('Weixin returns a specific retry message when encrypted image loading fails
     ownerUserId: 'owner-user',
     harness: {
       sessionExists: async () => true,
-      ask: async () => assert.fail('a failed image must not reach Harness'),
+      ask: async (_sessionId, content, options) => { await loadDeferredImages(content, options); assert.fail('invalid images must not reach the model'); },
     },
     state: fixture.state,
     logger: { error() {} },

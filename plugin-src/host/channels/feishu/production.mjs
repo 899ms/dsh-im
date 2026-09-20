@@ -1,3 +1,4 @@
+import { getImageInputSettingsStore } from '../../../../src/channels/shared/image-input-settings-store.mjs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { unlink } from 'node:fs/promises';
@@ -211,6 +212,7 @@ export async function createProductionController(ctx, config = {}, internals = {
     ...(controlExecutor ? { controlExecutor } : {}),
     ...(sessionMaintenanceExecutor ? { sessionMaintenanceExecutor } : {}),
     ...(fileIngressExecutor ? { fileIngressExecutor } : {}),
+    imageInputPolicy: () => getImageInputSettingsStore(config).get(),
   });
   const proxyEnv = internals.proxyEnv ?? process.env;
   const wsAgent = createFeishuWebSocketAgent(proxyEnv, internals.createProxyAgent);

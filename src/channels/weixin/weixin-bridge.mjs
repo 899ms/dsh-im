@@ -815,7 +815,7 @@ export class WeixinHarnessBridge {
       await this.#startTyping(sender, contextToken);
       try {
         let content = hasImages || hasReply
-          ? await promptContentForInboundMessage(promptMessage, { signal: this.#signal })
+          ? await promptContentForInboundMessage(promptMessage, { signal: this.#signal, deferImages: true })
           : undefined;
         const snapshot = this.#acceptedMessageIds.get(messageId);
         let contextEnhanced = false;
@@ -858,6 +858,7 @@ export class WeixinHarnessBridge {
               await this.#resumeTyping(key, sender, contextToken);
             },
             files: promptMessage.files,
+            images: promptMessage.images,
           },
         }));
         if (batchSubmission) {

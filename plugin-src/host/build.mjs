@@ -18,6 +18,7 @@ const externalRuntimePackages = [
   'mailparser',
   'nodemailer',
   'qrcode',
+  'sharp',
   'undici',
 ];
 const external = externalRuntimePackages.flatMap((name) => [name, `${name}/*`]);

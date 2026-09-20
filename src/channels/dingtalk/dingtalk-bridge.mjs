@@ -1339,7 +1339,7 @@ export class DingtalkHarnessBridge {
         signal: this.#signal,
       });
       let content = hasInboundImages(modelMessage) || hasReply
-        ? await promptContentForInboundMessage(modelMessage, { signal: this.#signal })
+        ? await promptContentForInboundMessage(modelMessage, { signal: this.#signal, deferImages: true })
         : undefined;
       const snapshot = this.#acceptedMessageIds.get(messageId);
       let contextEnhanced = false;
@@ -1396,6 +1396,7 @@ export class DingtalkHarnessBridge {
           }),
           onInteractionResolved: (resolution) => this.#handleInteractionResolved(resolution),
           files: modelMessage.files,
+          images: modelMessage.images,
         },
       });
       if (batchSubmission) {

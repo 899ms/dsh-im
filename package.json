@@ -184,6 +184,7 @@
     "test": "test"
   },
   "optionalDependencies": {
-    "@tencent-qqmail/agently-cli": "^1.0.18"
+    "@tencent-qqmail/agently-cli": "^1.0.18",
+    "sharp": "0.35.4"
   }
 }

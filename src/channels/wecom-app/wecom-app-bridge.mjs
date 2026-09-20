@@ -593,7 +593,7 @@ export class WecomAppBridge {
       let artifacts = [];
       try {
         let content = hasImages || hasReply
-          ? await promptContentForInboundMessage(promptMessage, { signal: this.#signal })
+          ? await promptContentForInboundMessage(promptMessage, { signal: this.#signal, deferImages: true })
           : undefined;
         const snapshot = this.#acceptedMessageIds.get(messageId);
         let contextEnhanced = false;
@@ -639,6 +639,7 @@ export class WecomAppBridge {
               await this.#handleInteractionResolved(resolution);
             },
             files: promptMessage.files,
+            images: promptMessage.images,
           },
         }));
         if (batchSubmission) {

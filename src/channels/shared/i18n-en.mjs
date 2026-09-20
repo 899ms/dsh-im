@@ -1,3 +1,4 @@
+import imageInput from './i18n-en/image-input.mjs';
 import diagnostics from './i18n-en/diagnostics.mjs';
 // English translations for host-side user-facing text.
 // Keys are the exact Chinese literals passed to t() in src/channels/**.
@@ -23,6 +24,7 @@ import email from './i18n-en/email.mjs';
 export const EN = Object.freeze(Object.assign(
   {},
   diagnostics,
+  imageInput,
   sharedA,
   sharedB,
   sharedC,
