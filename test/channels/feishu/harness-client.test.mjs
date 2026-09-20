@@ -1055,6 +1055,128 @@ test('tracker exposes per-step assistant messages and tool arguments', () => {
   ]);
 });
 
+test('tracker live mode exposes native-process reasoning, tool results, and boundaries', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-live', afterSeq: 0 });
+  const updates = tracker.consumeAll([
+    { type: 'turn/start', seq: 1, data: { turn: 3 } },
+    { type: 'user/message', seq: 2, data: { turn: 3, source: { rpcId: 'rpc-live' } } },
+    { type: 'assistant/chunk', seq: 3, data: {
+      turn: 3,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '分析中' },
+    } },
+    { type: 'tool/call', seq: 4, data: {
+      turn: 3,
+      step: 0,
+      callId: 'call-live',
+      name: 'read_file',
+      arguments: '{"path":"a.md"}',
+    } },
+    { type: 'tool/result', seq: 5, data: {
+      turn: 3,
+      step: 0,
+      message: {
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-live',
+          content: [{ type: 'text', text: '文件内容' }],
+        }],
+      },
+    } },
+    { type: 'turn/end', seq: 6, data: { turn: 3, reason: { kind: 'completed' } } },
+  ], { live: true });
+
+  assert.deepEqual(updates, [
+    { type: 'turn-start', turn: 3 },
+    { type: 'reasoning', turn: 3, text: '分析中' },
+    {
+      type: 'tool',
+      name: 'read_file',
+      arguments: '{"path":"a.md"}',
+      callId: 'call-live',
+      turn: 3,
+    },
+    {
+      type: 'tool-result',
+      turn: 3,
+      callId: 'call-live',
+      toolName: 'read_file',
+      text: '文件内容',
+    },
+    { type: 'turn-end', turn: 3, reason: { kind: 'completed' } },
+  ]);
+});
+
+test('tracker accepts a late fractional reasoning chunk after a newer durable event', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-race', afterSeq: 0 });
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 1, data: { turn: 3 } },
+    { type: 'user/message', seq: 2, data: {
+      turn: 3,
+      source: { rpcId: 'rpc-race' },
+    } },
+    { type: 'assistant/message', seq: 4, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '阶段结果' }] },
+    } },
+  ], { live: true });
+
+  const updates = tracker.consumeAll([{
+    type: 'assistant/chunk',
+    seq: 3.5,
+    data: {
+      turn: 3,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '迟到推理' },
+    },
+  }], { live: true });
+
+  assert.deepEqual(updates, [{
+    type: 'reasoning',
+    turn: 3,
+    text: '迟到推理',
+  }]);
+  assert.deepEqual(tracker.consumeAll([{
+    type: 'assistant/chunk',
+    seq: 3.5,
+    data: {
+      turn: 3,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '迟到推理' },
+    },
+  }], { live: true }), []);
+  assert.equal(tracker.lastSeq, 4);
+});
+
+test('tracker rejects a late fractional text chunk after its canonical message', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-text-race', afterSeq: 0 });
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 1, data: { turn: 3 } },
+    { type: 'user/message', seq: 2, data: {
+      turn: 3,
+      source: { rpcId: 'rpc-text-race' },
+    } },
+    { type: 'assistant/message', seq: 4, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '最终答案' }] },
+    } },
+  ], { live: true });
+
+  assert.deepEqual(tracker.consumeAll([{
+    type: 'assistant/chunk',
+    seq: 3.5,
+    data: {
+      turn: 3,
+      step: 0,
+      chunk: { type: 'text-delta', index: 0, text: '迟到片段' },
+    },
+  }], { live: true }), []);
+  assert.equal(tracker.answer, '最终答案');
+  assert.equal(tracker.lastSeq, 4);
+});
+
 test('a canonical message equal to committed text dedupes the trailing text update', () => {
   const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-dedupe', afterSeq: 0 });
   tracker.consumeAll([
@@ -1540,4 +1662,127 @@ test('ask() publishes the guidance a channel captured and never reads the prompt
   // Turning the scope off clears the Session's snapshot again.
   await client.ask(sessionId, '普通消息', { timeoutMs: 450, sourceGuidance: '' });
   assert.equal(imSourceGuidance.get(sessionId), undefined);
+});
+
+test('tracker surfaces live reasoning that streams before the turn binds', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-early', afterSeq: 0 });
+
+  // Reasoning streams before the durable user/message binds the turn
+  // (order: turn/start, step/start, reasoning, user/message). It must still
+  // surface, using the turn carried on the event, without advancing lastSeq —
+  // otherwise Live process mode shows tool calls but drops the thinking text.
+  const early = tracker.consumeAll([
+    { type: 'turn/start', seq: 1, data: { turn: 7 } },
+    { type: 'assistant/chunk', seq: 1.5, data: {
+      turn: 7,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '绑定前推理' },
+    } },
+  ], { live: true });
+
+  assert.deepEqual(early, [
+    { type: 'reasoning', turn: 7, text: '绑定前推理' },
+  ]);
+  // The transient (fractional) frame must not touch the durable cursor,
+  // so the reconnect guard for durable events stays intact.
+  assert.equal(tracker.lastSeq, 0);
+
+  // The same fractional frame is deduped on replay.
+  assert.deepEqual(tracker.consumeAll([
+    { type: 'assistant/chunk', seq: 1.5, data: {
+      turn: 7,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '绑定前推理' },
+    } },
+  ], { live: true }), []);
+
+  // Once the durable user/message binds, normal streaming continues intact.
+  const bound = tracker.consumeAll([
+    { type: 'user/message', seq: 2, data: { turn: 7, source: { rpcId: 'rpc-early' } } },
+    { type: 'assistant/chunk', seq: 3, data: {
+      turn: 7,
+      step: 0,
+      chunk: { type: 'reasoning-delta', index: 0, text: '绑定后推理' },
+    } },
+    { type: 'turn/end', seq: 4, data: { turn: 7, reason: { kind: 'completed' } } },
+  ], { live: true });
+
+  assert.deepEqual(bound, [
+    { type: 'turn-start', turn: 7 },
+    { type: 'reasoning', turn: 7, text: '绑定后推理' },
+    { type: 'turn-end', turn: 7, reason: { kind: 'completed' } },
+  ]);
+  assert.equal(tracker.lastSeq, 4);
+});
+
+test('tracker recovers the final answer when a live turn/end outruns history after binding', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-gap', afterSeq: -1 });
+
+  // Bind the turn and stream one process message over the mux (seq 0..2).
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 0, data: { turn: 3 } },
+    { type: 'user/message', seq: 1, data: { turn: 3, source: { rpcId: 'rpc-gap' } } },
+    { type: 'assistant/message', seq: 2, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '先读取文件' }] },
+    } },
+  ], { live: true });
+  assert.equal(tracker.turn, 3);
+  assert.equal(tracker.answer, '先读取文件');
+
+  // Disconnect drops the final answer (seq 3); reconnect delivers turn/end
+  // (seq 4) over the mux first. It must not finish the turn or advance the
+  // cursor across the gap, or the pending final answer would be skipped.
+  tracker.consumeAll([
+    { type: 'turn/end', seq: 4, data: { turn: 3, reason: { kind: 'completed' } } },
+  ], { live: true, fromMux: true });
+  assert.equal(tracker.finished, false);
+  assert.equal(tracker.lastSeq, 2);
+
+  // History poll backfills the hole in order: final answer then the end.
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 0, data: { turn: 3 } },
+    { type: 'user/message', seq: 1, data: { turn: 3, source: { rpcId: 'rpc-gap' } } },
+    { type: 'assistant/message', seq: 2, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '先读取文件' }] },
+    } },
+    { type: 'assistant/message', seq: 3, data: {
+      turn: 3,
+      step: 1,
+      message: { content: [{ type: 'text', text: '最终答案' }] },
+    } },
+    { type: 'turn/end', seq: 4, data: { turn: 3, reason: { kind: 'completed' } } },
+  ], { live: true });
+
+  assert.equal(tracker.finished, true);
+  assert.deepEqual(tracker.reason, { kind: 'completed' });
+  assert.equal(tracker.lastSeq, 4);
+  assert.equal(tracker.answer, '先读取文件\n\n最终答案');
+});
+
+test('tracker (all mode) recovers the final answer in the same reconnect scenario', () => {
+  // Contrast baseline: in all mode the premature turn/end never arrives over a
+  // mux, so history backfill alone delivers everything in order.
+  const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-gap-all', afterSeq: -1 });
+  tracker.consumeAll([
+    { type: 'turn/start', seq: 0, data: { turn: 3 } },
+    { type: 'user/message', seq: 1, data: { turn: 3, source: { rpcId: 'rpc-gap-all' } } },
+    { type: 'assistant/message', seq: 2, data: {
+      turn: 3,
+      step: 0,
+      message: { content: [{ type: 'text', text: '先读取文件' }] },
+    } },
+    { type: 'assistant/message', seq: 3, data: {
+      turn: 3,
+      step: 1,
+      message: { content: [{ type: 'text', text: '最终答案' }] },
+    } },
+    { type: 'turn/end', seq: 4, data: { turn: 3, reason: { kind: 'completed' } } },
+  ]);
+
+  assert.equal(tracker.finished, true);
+  assert.equal(tracker.answer, '先读取文件\n\n最终答案');
 });

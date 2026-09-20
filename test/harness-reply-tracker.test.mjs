@@ -142,3 +142,26 @@ test('HarnessReplyTracker still ignores duplicate sequences and unrelated turns'
 
   assert.equal(tracker.answer, '有效');
 });
+
+test('HarnessReplyTracker does not let pre-turn live frames skip the prompt turn', () => {
+  const tracker = new HarnessReplyTracker({ promptRpcId: PROMPT_RPC_ID, afterSeq: 0 });
+
+  assert.deepEqual(tracker.consumeAll([
+    textDelta(5, { turn: 1, step: 0, text: '过早到达' }),
+  ], { live: true }), []);
+  assert.equal(tracker.lastSeq, 0);
+
+  const updates = tracker.consumeAll([
+    ...turnPrefix(1),
+    textDelta(3, { turn: 1, step: 0, text: '有效答案' }),
+    { type: 'turn/end', seq: 4, data: { turn: 1, reason: { kind: 'completed' } } },
+  ], { live: true });
+
+  assert.deepEqual(updates, [
+    { type: 'turn-start', turn: 1 },
+    { type: 'text', text: '有效答案' },
+    { type: 'turn-end', turn: 1, reason: { kind: 'completed' } },
+  ]);
+  assert.equal(tracker.answer, '有效答案');
+  assert.equal(tracker.finished, true);
+});

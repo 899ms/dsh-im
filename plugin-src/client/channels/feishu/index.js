@@ -466,7 +466,7 @@ function RemoveConfirmation({ bot, busy, onConfirm, onCancel }) {
   );
 }
 
-/** One select for the step-push presentation: off / per-step posts / process card. */
+/** One select for the step-push presentation. */
 function StepPushEditor({ value = false, mode = "post", disabled = false, onSave, onModeSave }) {
   const titleId = React.useId();
   const helpId = `${titleId}-help`;
@@ -496,7 +496,7 @@ function StepPushEditor({ value = false, mode = "post", disabled = false, onSave
         if (value === true) await onSave?.(false);
         return;
       }
-      const nextMode = next === "streaming_card" ? "streaming_card" : "post";
+      const nextMode = ["streaming_card", "live_cot"].includes(next) ? next : "post";
       // Enabling (or switching presentation) may need both writes; the flag
       // must land before the mode so the runtime never sees a mode without
       // step push enabled.
@@ -507,7 +507,9 @@ function StepPushEditor({ value = false, mode = "post", disabled = false, onSave
 
   const helpText = current === "off"
     ? "适合日常问答：执行过程中不显示工具调用等中间步骤，只回复最终结果"
-    : current === "streaming_card"
+    : current === "live_cot"
+      ? "使用飞书原生思考过程展示推理、工具调用与结果，最终答案单独发送"
+      : current === "streaming_card"
       ? "推荐长任务使用：过程与最终答案都在同一张卡片里实时更新，不刷屏"
       : "每一步都单独发一条消息（含工具调用和过程说明）；注意长任务会连续发送较多消息";
 
@@ -529,7 +531,7 @@ function StepPushEditor({ value = false, mode = "post", disabled = false, onSave
           id: helpId,
           className: "dim-presetTooltip",
           role: "tooltip",
-        }, "设置任务执行过程的呈现方式：不显示、实时卡片或逐步消息"))),
+        }, "设置任务执行过程的呈现方式：不显示、原生直播、实时卡片或逐步消息"))),
     saving
       ? h("span", { className: "dim-feishuGroupControlStatus", role: "status" }, "保存中…")
       : null),
@@ -541,6 +543,7 @@ function StepPushEditor({ value = false, mode = "post", disabled = false, onSave
     onChange: change,
   },
   h("option", { value: "off" }, "不显示过程（只发送最终答案）"),
+  h("option", { value: "live_cot" }, "实时直播（飞书原生思考过程）"),
   h("option", { value: "streaming_card" }, "实时过程卡（全程一张卡片动态更新）"),
   h("option", { value: "post" }, "逐步直播（每一步单独发一条消息）")),
   h("p", { className: "dim-feishuGroupHelp" }, helpText),

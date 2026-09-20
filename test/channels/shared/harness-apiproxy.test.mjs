@@ -305,6 +305,56 @@ test('ask uses an initially empty in-process mux and correlates replies with its
   assert.equal(host.streams.size, 0, 'ask completion must dispose its mux subscription');
 });
 
+test('live ask consumes transient reasoning from mux even when history never retains it', async () => {
+  const host = hostFixture();
+  const updates = [];
+  host.onPrompt = (rpcId) => {
+    host.append({ type: 'turn/start', seq: 0, data: { turn: 1 } });
+    host.append({ type: 'user/message', seq: 1, data: { turn: 1, source: { rpcId } } });
+    host.emit({
+      rpcId: 'transient-reasoning',
+      payload: {
+        type: 'session/event',
+        sessionId: 'session',
+        event: {
+          type: 'assistant/chunk',
+          seq: 1.5,
+          data: {
+            turn: 1,
+            step: 0,
+            chunk: { type: 'reasoning-delta', index: 0, text: '瞬时推理' },
+          },
+        },
+      },
+    });
+    host.append({ type: 'assistant/message', seq: 2, data: {
+      turn: 1,
+      step: 0,
+      message: { content: [{ type: 'text', text: '最终答案' }] },
+    } });
+    host.append({ type: 'turn/end', seq: 3, data: {
+      turn: 1,
+      reason: { kind: 'completed' },
+    } });
+  };
+  const client = localClient(host.apiProxy, { rpcIdPrefix: 'live-test' });
+
+  const answer = await client.ask('session', 'hello', {
+    progressMode: 'live',
+    onUpdate: (update) => updates.push(update),
+    timeoutMs: 1_000,
+  });
+
+  assert.equal(answer, '最终答案');
+  assert.equal(updates.some(
+    (update) => update.type === 'reasoning' && update.text === '瞬时推理',
+  ), true);
+  assert.equal(host.history.some(
+    ({ event }) => event.type === 'assistant/chunk',
+  ), false);
+  assert.equal(host.streams.size, 0);
+});
+
 test('clients on one Host share interaction ownership across context wrappers and reconnect safely', async () => {
   const host = hostFixture();
   const scope = {};

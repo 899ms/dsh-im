@@ -115,6 +115,7 @@ import {
   FEISHU_STEP_PUSH_MODES,
   normalizeFeishuStepPushMode,
 } from './step-push-mode.mjs';
+import { FeishuLiveCot } from './live-cot.mjs';
 
 // Lazily evaluated: t() must run after setImHostLanguage, not at import time.
 const INTERACTION_RESOLVED_TEXT = () => t('这个问题已在其他客户端处理，无需再次回答。');
@@ -607,7 +608,7 @@ export class FeishuHarnessBridge {
   #groupTopicReply = false;
   /** When true, streaming turns push tool calls and interim notes as discrete messages. */
   #stepPush = false;
-  /** Step push presentation: 'post' (discrete messages) or 'streaming_card'. */
+  /** Step push presentation: discrete posts, a CardKit card, or native live CoT. */
   #stepPushMode = FEISHU_STEP_PUSH_MODES.POST;
   /** Per-conversation step push state: key → { lastSentAt, count, breakerLogged }. */
   #stepPushSendState = new Map();
@@ -4931,6 +4932,19 @@ export class FeishuHarnessBridge {
     // 流式卡片模式：每轮一张过程卡（原地 patch），过程与最终答案都进卡；
     // post 模式维持逐条直推。先预建卡片状态，纯问答回合也能在收尾时开卡。
     const streamingCard = this.#stepPushMode === FEISHU_STEP_PUSH_MODES.STREAMING_CARD;
+    const liveCot = this.#stepPushMode === FEISHU_STEP_PUSH_MODES.LIVE_COT
+      && typeof this.#channel?.createCot === 'function'
+      && typeof this.#channel?.writeCotEvents === 'function';
+    const cot = liveCot
+      ? new FeishuLiveCot(this.#channel, chatId, {
+          replyTo: messageId,
+          hidden: false,
+          onFailure: (error) => this.#logger.warn?.(
+            '[dsh-feishu] native live process failed; final answer will continue:',
+            error?.message ?? String(error),
+          ),
+        })
+      : null;
     if (streamingCard) {
       if (this.#stepCards.has(key)) {
         // 上一轮异常退出留下的「运行中」卡片先收尾，避免与本轮混淆。
@@ -4983,7 +4997,9 @@ export class FeishuHarnessBridge {
         messageId,
       );
     };
-    const watchdog = streamingCard ? null : this.#startThinkingStatusWatchdog(key, chatId, messageId);
+    const watchdog = streamingCard || liveCot
+      ? null
+      : this.#startThinkingStatusWatchdog(key, chatId, messageId);
     let completed;
     try {
       completed = await askInWorkspaceSession({
@@ -5000,7 +5016,7 @@ export class FeishuHarnessBridge {
       existsOptions: { signal: this.#signal },
       askOptions: {
         ...baseAskOptions,
-        progressMode: 'all',
+        progressMode: liveCot ? 'live' : 'all',
         // 提问/审批卡弹出前先定格当前过程卡，答案随之流到交互消息之后
         // 的新卡上（与主流式路径的 rotate 语义一致）。
         ...(streamingCard ? {
@@ -5012,6 +5028,15 @@ export class FeishuHarnessBridge {
           },
         } : {}),
         onUpdate: async (update) => {
+          if (liveCot) {
+            await cot.handle(update);
+            if (update.type === 'assistant-message') {
+              pendingStep = update;
+            } else if (update.type === 'tool') {
+              pendingStep = null;
+            }
+            return;
+          }
           if (update.type === 'assistant-message') {
             if (pendingStep && Number(update.step) > Number(pendingStep.step)) {
               await flushPendingStep();
@@ -5054,6 +5079,7 @@ export class FeishuHarnessBridge {
       },
       });
     } catch (error) {
+      await cot?.finish(error);
       if (streamingCard) {
         this.#stepStopFlags.delete(key);
         await this.#finishStepCard(key, { stopped: true });
@@ -5063,6 +5089,7 @@ export class FeishuHarnessBridge {
       // 回合结束（成功/失败/中断）：停看门狗并撤回残留思考中心跳。
       await watchdog?.stop();
     }
+    await cot?.finish();
     markAskComplete();
     const finalStepText = pendingStep ? pendingStep.text : null;
     pendingStep = null;
@@ -5130,7 +5157,7 @@ export class FeishuHarnessBridge {
       }
       textReceipt = createDeliveryReceipt({
         deliveryId: messageId,
-        presentation: 'feishu-step-push-post',
+        presentation: liveCot ? 'feishu-live-cot-answer' : 'feishu-step-push-post',
         providerMessageIds,
       });
       this.#status.streamResponses = (this.#status.streamResponses ?? 0) + 1;

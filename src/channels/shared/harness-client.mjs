@@ -428,6 +428,29 @@ function toolResultErrorText(error) {
   return null;
 }
 
+/** Join the visible text carried by a Harness tool result. */
+function toolResultText(data) {
+  const blocks = Array.isArray(data?.message?.content) ? data.message.content : [];
+  const nested = blocks.flatMap((block) => (
+    Array.isArray(block?.content) ? block.content : [block]
+  ));
+  const text = nested
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('');
+  return text || nonEmptyText(data?.text) || toolResultErrorText(data?.error) || '';
+}
+
+function toolResultCallId(data) {
+  const blocks = Array.isArray(data?.message?.content) ? data.message.content : [];
+  return blocks
+    .map((block) => nonEmptyText(block?.toolCallId))
+    .find(Boolean)
+    ?? nonEmptyText(data?.message?.source?.callId)
+    ?? nonEmptyText(data?.callId)
+    ?? nonEmptyText(data?.subCallId);
+}
+
 function consumeInteractionOwnership(ownership, entries) {
   const ordered = [...entries]
     .map((entry) => entry?.event ?? entry)
@@ -518,6 +541,7 @@ export class HarnessReplyTracker {
   #reason = null;
   #toolNames = new Map();
   #lastToolName = null;
+  #transientSeqs = new Set();
   #reasoning = false;
 
   constructor({ promptRpcId, afterSeq = -1, reasoning = false }) {
@@ -560,7 +584,7 @@ export class HarnessReplyTracker {
     pushUpdate({ type: 'text', text });
   }
 
-  consumeAll(entries) {
+  consumeAll(entries, { live = false, fromMux = false } = {}) {
     const updates = [];
     // 同一批轮询内的 text 帧只保留最新累积，其余事件逐帧透出，
     // 让消费方能按顺序看到每个工具调用与结果。
@@ -581,13 +605,67 @@ export class HarnessReplyTracker {
 
     for (const event of ordered) {
       const seq = event.seq ?? -1;
-      if (seq <= this.#lastSeq) continue;
-      this.#lastSeq = seq;
+      const lateReasoningChunk = event.type === 'assistant/chunk'
+        && event.data?.chunk?.type === 'reasoning-delta'
+        && Number.isFinite(seq)
+        && !Number.isInteger(seq);
+      if (this.#targetTurn === null) {
+        // Reasoning streams before the durable user/message binds the turn
+        // (order: turn/start, step/start, reasoning, user/message). Gating it
+        // on binding drops the thinking entirely. Live reasoning frames carry
+        // their own turn and a transient (fractional) seq, so surface them by
+        // that turn without advancing #lastSeq — the reconnect guard for
+        // durable events stays intact, and the consumer opens the run lazily.
+        if (live && lateReasoningChunk) {
+          if (this.#transientSeqs.has(seq)) continue;
+          this.#transientSeqs.add(seq);
+          const text = event.data?.chunk?.text;
+          const turn = event.data?.turn ?? this.#openTurn;
+          if (typeof text === 'string' && text && turn !== null && turn !== undefined) {
+            pushUpdate({ type: 'reasoning', turn, text });
+          }
+          continue;
+        }
+        if (seq <= this.#lastSeq) continue;
+        if (event.type === 'turn/start') {
+          this.#openTurn = event.data?.turn ?? null;
+          continue;
+        }
+        if (event.type === 'user/message' && event.data?.source?.rpcId === this.#promptRpcId) {
+          this.#lastSeq = seq;
+          this.#targetTurn = event.data?.turn ?? this.#openTurn;
+          if (live) pushUpdate({ type: 'turn-start', turn: this.#targetTurn });
+        }
+        continue;
+      }
+      // A turn/end delivered over the mux can outrun the history backfill of
+      // the durable events it trails (e.g. the final assistant message).
+      // Advancing the watermark to its seq would make `seq <= lastSeq` drop
+      // those pending events, losing the final answer. Only defer such a mux
+      // end across the gap; the authoritative, ordered history poll fills the
+      // hole and then redelivers the end. A history end is never deferred, so a
+      // failed turn with no trailing answer still finishes immediately.
+      if (fromMux
+        && event.type === 'turn/end'
+        && event.data?.turn === this.#targetTurn
+        && Number.isInteger(seq)
+        && seq > this.#lastSeq + 1) {
+        continue;
+      }
+
+      if (lateReasoningChunk) {
+        if (this.#transientSeqs.has(seq)) continue;
+        this.#transientSeqs.add(seq);
+      } else {
+        if (seq <= this.#lastSeq) continue;
+        this.#lastSeq = seq;
+      }
 
       if (event.type === 'turn/start') this.#openTurn = event.data?.turn ?? null;
 
       if (event.type === 'user/message' && event.data?.source?.rpcId === this.#promptRpcId) {
-        this.#targetTurn = this.#openTurn;
+        this.#targetTurn = event.data?.turn ?? this.#openTurn;
+        if (live) pushUpdate({ type: 'turn-start', turn: this.#targetTurn });
         continue;
       }
       if (this.#targetTurn === null) continue;
@@ -597,9 +675,26 @@ export class HarnessReplyTracker {
         this.#finished = true;
         this.#reason = event.data?.reason ?? null;
         this.#openTurn = null;
+        if (live) {
+          pushUpdate({
+            type: 'turn-end',
+            turn: this.#targetTurn,
+            reason: this.#reason,
+          });
+        }
         continue;
       }
       if (event.data?.turn !== this.#targetTurn) continue;
+
+      if (live
+        && event.type === 'assistant/chunk'
+        && event.data?.chunk?.type === 'reasoning-delta') {
+        const text = event.data.chunk.text;
+        if (typeof text === 'string' && text) {
+          pushUpdate({ type: 'reasoning', turn: this.#targetTurn, text });
+        }
+        continue;
+      }
 
       if (event.type === 'assistant/chunk' && event.data?.chunk?.type === 'text-delta') {
         const step = event.data?.step ?? 0;
@@ -615,7 +710,14 @@ export class HarnessReplyTracker {
         this.#assistantText.setCanonical(step, text);
         // canonical 定稿且非空时按 step 透出，供分步推送消费方使用；
         // 先于 commitText 透出，保持 text 更新作为批次末尾的既有语义。
-        if (text) pushUpdate({ type: 'assistant-message', step, text });
+        if (text) {
+          pushUpdate({
+            type: 'assistant-message',
+            step,
+            text,
+            ...(live ? { turn: this.#targetTurn } : {}),
+          });
+        }
         // Thinking-trace channels consume this as the 💭 line that precedes the
         // tool call it explains; only consumers that explicitly subscribed
         // (reasoning: true) see these updates, so default-mode channels keep
@@ -646,20 +748,38 @@ export class HarnessReplyTracker {
             }
           }
         }
-        pushUpdate({ type: 'tool', name, ...(argsText ? { arguments: argsText } : {}), ...(callId ? { callId } : {}) });
+        pushUpdate({
+          type: 'tool',
+          name,
+          ...(argsText ? { arguments: argsText } : {}),
+          ...(callId ? { callId } : {}),
+          ...(live ? { turn: this.#targetTurn } : {}),
+        });
       } else if (event.type === 'tool/result') {
-        const callId = nonEmptyText(event.data?.message?.source?.callId)
-          ?? nonEmptyText(event.data?.callId)
-          ?? nonEmptyText(event.data?.subCallId);
+        const callId = toolResultCallId(event.data);
         const toolName = (callId ? this.#toolNames.get(callId) : null)
           ?? this.#lastToolName;
         const error = toolResultErrorText(event.data?.error);
-        pushUpdate({
-          type: 'status',
-          text: t('正在整理结果…'),
-          ...(toolName ? { toolName } : {}),
-          ...(error ? { error } : {}),
-        });
+        if (live) {
+          const providerErrorCode = event.data?.error?.code;
+          pushUpdate({
+            type: 'tool-result',
+            turn: this.#targetTurn,
+            ...(callId ? { callId } : {}),
+            ...(toolName ? { toolName } : {}),
+            text: toolResultText(event.data),
+            ...(providerErrorCode !== undefined && providerErrorCode !== null
+              ? { errorCode: String(providerErrorCode) }
+              : {}),
+          });
+        } else {
+          pushUpdate({
+            type: 'status',
+            text: t('正在整理结果…'),
+            ...(toolName ? { toolName } : {}),
+            ...(error ? { error } : {}),
+          });
+        }
       }
     }
     return updates;
@@ -1185,6 +1305,7 @@ export class HarnessClient {
     signal,
     onInteraction,
     onResolved,
+    onSessionEvent,
     onOpen,
     ownership,
   } = {}) {
@@ -1198,6 +1319,9 @@ export class HarnessClient {
     if (onResolved !== undefined && typeof onResolved !== 'function') {
       throw new TypeError('onResolved must be a function');
     }
+    if (onSessionEvent !== undefined && typeof onSessionEvent !== 'function') {
+      throw new TypeError('onSessionEvent must be a function');
+    }
     if (onOpen !== undefined && typeof onOpen !== 'function') {
       throw new TypeError('onOpen must be a function');
     }
@@ -1208,6 +1332,7 @@ export class HarnessClient {
           signal,
           onInteraction,
           onResolved,
+          onSessionEvent,
           onOpen,
           ownership,
         });
@@ -1488,7 +1613,9 @@ export class HarnessClient {
     const timeoutMs = options.timeoutMs ?? 600_000;
     const signal = options.signal;
     const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : null;
-    const progressMode = options.progressMode === 'all' ? 'all' : 'latest';
+    const progressMode = options.progressMode === 'live'
+      ? 'live'
+      : options.progressMode === 'all' ? 'all' : 'latest';
     // Reasoning updates only exist for consumers that opt in (thinking-trace
     // mode); default ask() consumers keep the pre-thinking-traces stream.
     const reasoning = options.reasoning === true;
@@ -1513,7 +1640,38 @@ export class HarnessClient {
     const promptRpcId = `${this.#rpcIdPrefix}-${randomUUID()}`;
     const releasePromptInputOrigin = registerImInputOrigin(this.#interactionRegistry, promptRpcId);
     const tracker = new HarnessReplyTracker({ promptRpcId, afterSeq: baselineSeq, reasoning });
+    let lastProgressAt = Date.now();
+    let lastPollSeq = tracker.lastSeq;
+    let progressTail = Promise.resolve();
+    const consumeProgress = (entries, { fromMux = false } = {}) => {
+      const updates = tracker.consumeAll(entries, {
+        live: progressMode === 'live',
+        fromMux,
+      });
+      const seqAdvanced = tracker.lastSeq > lastPollSeq;
+      lastPollSeq = tracker.lastSeq;
+      if (seqAdvanced) lastProgressAt = Date.now();
+      if (!onUpdate) return progressTail;
+      const visibleUpdates = progressMode === 'all' || progressMode === 'live'
+        ? updates
+        : updates
+            .filter((update) => update.type !== 'assistant-message' && update.type !== 'reasoning')
+            .slice(-1);
+      for (const update of visibleUpdates) {
+        progressTail = progressTail
+          .then(() => onUpdate(update))
+          .catch((error) => {
+            console.warn(
+              '[dsh-im] ignored a progress update failure:',
+              this.#logPrefix,
+              error.message,
+            );
+          });
+      }
+      return progressTail;
+    };
     const interactionController = onInteraction || onInteractionResolved
+      || (progressMode === 'live' && onUpdate)
       ? new AbortController()
       : null;
     const interactionSignal = interactionController
@@ -1610,6 +1768,9 @@ export class HarnessClient {
           signal: interactionSignal,
           onInteraction,
           onResolved: onInteractionResolved,
+          onSessionEvent: progressMode === 'live'
+            ? (event) => { consumeProgress([event], { fromMux: true }); }
+            : undefined,
           onOpen: markOpen,
           ownership,
         });
@@ -1687,8 +1848,6 @@ export class HarnessClient {
         // confirm the Session is still running before renewing the wait.
         // Interaction ownership is intentionally not a liveness signal: it stays
         // active until turn/end and can therefore outlive a stalled turn.
-        let lastProgressAt = Date.now();
-        let lastPollSeq = tracker.lastSeq;
         while (true) {
           await sleep(300, signal);
           const history = await this.rpc(
@@ -1702,22 +1861,7 @@ export class HarnessClient {
             this.#consumeInteractionOwnerships(sessionId, history.events ?? []);
             if (!wasActive && ownership.active) ownership.reconnect?.();
           }
-          const updates = tracker.consumeAll(history.events ?? []);
-          const seqAdvanced = tracker.lastSeq > lastPollSeq;
-          lastPollSeq = tracker.lastSeq;
-          if (seqAdvanced) lastProgressAt = Date.now();
-          if (onUpdate) {
-            // latest 模式只投递一条最新进展；assistant-message 是分步推送专用更新，
-            // 且 canonical 去重后可能成为批次唯一变化，绝不能冒充进度投给全部渠道。
-            const visibleUpdates = visibleProgressUpdates(updates, progressMode);
-            for (const update of visibleUpdates) {
-              try {
-                await onUpdate(update);
-              } catch (error) {
-                console.warn('[dsh-im] ignored a progress update failure:', this.#logPrefix, error.message);
-              }
-            }
-          }
+          await consumeProgress(history.events ?? []);
           if (tracker.finished) {
             turnFinished = true;
             if (!ownership?.stopRequested && !harnessTurnSucceeded(tracker.reason)) {
@@ -1801,6 +1945,7 @@ export class HarnessClient {
     signal,
     onInteraction,
     onResolved,
+    onSessionEvent,
     onOpen,
     ownership,
   }) {
@@ -1840,8 +1985,9 @@ export class HarnessClient {
     };
     const processEnvelope = (envelope) => {
       const payload = envelope.payload;
-      if (ownership && payload.type === 'session/event') {
-        this.#consumeInteractionOwnerships(sessionId, [payload.event]);
+      if (payload.type === 'session/event') {
+        if (ownership) this.#consumeInteractionOwnerships(sessionId, [payload.event]);
+        dispatch(onSessionEvent, payload.event);
         return;
       }
       if (payload.type === 'question/requested' || payload.type === 'approval/requested') {
