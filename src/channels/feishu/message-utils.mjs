@@ -421,12 +421,44 @@ function feishuFileSource(event, client, file) {
   };
 }
 
+// 话题内用户消息的 parent_id === root_id === 话题首条，单看 parent_id
+// 分不清"用户主动引用某条消息"和"用户只是在话题里说话"。锚点每轮都展开
+// 会把话题首文反复塞进 prompt，而它从第 2 轮起就已经在上下文里了。
+// 这里记住每个话题的锚点归属于哪一条 message id。
+// 必须按 message id 记、不能只记"这个话题见过"：bridge 对同一条消息会调用
+// extractInboundMessage 两次（#accept 判准入、#handle 跑回合），只记话题的话
+// 第一次就把额度吃掉，真正构造 prompt 的那次反而拿不到锚点。
+const TOPIC_ANCHOR_OWNER_LIMIT = 4_000;
+const topicAnchorOwners = new Map(); // `${chatId}:${threadId}` → 首个 message id
+
+function shouldExpandReplyReference(event, targetId) {
+  const rootId = nonEmptyString(event?.message?.root_id);
+  // 主动引用具体消息、或根本不在话题里：照旧展开
+  if (!rootId || rootId !== targetId) return true;
+  const messageId = nonEmptyString(event?.message?.message_id);
+  // 没有 message id 就无法幂等判断，宁可不省也不误伤
+  if (!messageId) return true;
+  const chatId = nonEmptyString(event?.message?.chat_id) ?? '';
+  const threadId = nonEmptyString(event?.message?.thread_id) ?? rootId;
+  const key = `${chatId}:${threadId}`;
+  const owner = topicAnchorOwners.get(key);
+  if (owner === undefined) {
+    if (topicAnchorOwners.size >= TOPIC_ANCHOR_OWNER_LIMIT) topicAnchorOwners.clear();
+    topicAnchorOwners.set(key, messageId);
+    return true;
+  }
+  return owner === messageId;
+}
+
 function feishuReplyTargetId(event) {
   const parentId = nonEmptyString(event?.message?.parent_id);
-  if (parentId) return parentId;
-  const rootId = nonEmptyString(event?.message?.root_id);
-  const messageId = nonEmptyString(event?.message?.message_id);
-  return rootId && rootId !== messageId ? rootId : null;
+  let targetId = parentId;
+  if (!targetId) {
+    const rootId = nonEmptyString(event?.message?.root_id);
+    const messageId = nonEmptyString(event?.message?.message_id);
+    targetId = rootId && rootId !== messageId ? rootId : null;
+  }
+  return targetId && shouldExpandReplyReference(event, targetId) ? targetId : null;
 }
 
 function feishuReplyAttachments(messageType, parsed, post) {
