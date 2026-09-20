@@ -301,10 +301,21 @@ export class AgentMailTransport {
     this.#connected = false;
   }
 
-  /** The newest id, used to seed a cursor. */
+  /**
+   * The newest id, used to seed a cursor.
+   *
+   * Reads the list summary only. Going through `listMessages` without an
+   * allowlist meant "no filter", so seeding a cursor downloaded the body of the
+   * newest message — mail the policy may well refuse, fetched before anyone
+   * asked for it. The newest id is in the first summary already.
+   */
   async latestUid() {
-    const listed = await this.listMessages({ afterUid: null, limit: 1 });
-    return listed.length > 0 ? listed[0].uid : 0;
+    const { document } = await this.#call(
+      ['message', '+list', '--dir', INBOX, '--limit', '1'],
+      { signal: this.#signal },
+    );
+    const items = Array.isArray(document?.data?.data) ? document.data.data : [];
+    return String(items[0]?.message_id ?? '').trim() || 0;
   }
 
   /**

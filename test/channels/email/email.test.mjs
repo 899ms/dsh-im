@@ -2356,3 +2356,96 @@ test('a runtime that fails to start keeps the config instead of rolling back', a
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test('an attachment loader resolves a transport that fetches on demand', async () => {
+  // The Agent mailbox cannot ship bytes with the summary, so its `content` is a
+  // function. Returning it unchanged made the loader resolve to a function,
+  // which the inbound-file layer rejects as `inbound-file-data-invalid` — the
+  // download silently never happened.
+  const { normalizeEmail } = await import('../../../src/channels/email/email-runtime.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-email-att-'));
+  try {
+    const state = await new EmailStateStore(join(dir, 'state.json')).load();
+    const build = (content) => normalizeEmail({
+      uid: 'm1', messageId: '<r@x>',
+      from: { value: [{ address: 'a@x.com' }] },
+      to: { value: [{ address: 'b@y.com' }] },
+      cc: { value: [] }, subject: 'S', text: 'body',
+      attachments: [{ filename: 'r.txt', size: 5, contentType: 'text/plain', content }],
+    }, { address: 'b@y.com', state });
+
+    // On-demand transport: a function.
+    const fetched = await build(async () => Buffer.from('hello')).files[0].load();
+    assert.equal(Buffer.isBuffer(fetched), true, 'the loader resolves the function');
+    assert.equal(fetched.toString(), 'hello');
+
+    // Eager transport: bytes, unchanged behaviour.
+    const direct = await build(Buffer.from('world')).files[0].load();
+    assert.equal(Buffer.isBuffer(direct), true);
+    assert.equal(direct.toString(), 'world');
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('latestUid reads the summary only, never a body', async () => {
+  // Seeding a cursor went through `listMessages` without an allowlist, which
+  // means "no filter" — so it downloaded the newest message's body, mail the
+  // policy may refuse, before anyone asked for it.
+  const { createAgentMailTransportForTests } = await import(
+    '../../../src/channels/email/transports/agent-mail.mjs'
+  );
+  const calls = [];
+  const cli = (args) => {
+    calls.push(args[1] ?? args[0]);
+    const reply = (data) => Promise.resolve({
+      document: { ok: true, data }, stdout: '', stderr: '', exitCode: 0,
+    });
+    if (args[0] === 'auth') return reply({ logged_in: false });
+    if (args[0] === 'message' && args[1] === '+list') {
+      return reply({ data: [{ message_id: 'msg_99', subject: 'S', from: { email: 'x@y.com' } }], pagination: {} });
+    }
+    return reply({ message_id: 'msg_99', body: 'SECRET' });
+  };
+  const transport = createAgentMailTransportForTests({
+    config: { address: 'b@agent.qq.com' }, runCliImpl: cli,
+  });
+  assert.equal(await transport.latestUid(), 'msg_99');
+  assert.equal(calls.includes('+read'), false, 'no body was downloaded');
+});
+
+test('the model receives the mail headers, the parser does not', async (t) => {
+  // The channel hands over two texts: `controlText` (plain body, what the
+  // parsers read) and `content` (the same body with Subject/From/To/Cc above
+  // it, what the model should see). The bridge fell back to the parsed text for
+  // every ordinary message, so a subject-only instruction never reached the
+  // model at all.
+  const seen = [];
+  const { runtime, state } = await startDeliveryRuntime(t, {
+    mailbox: async () => [{
+      uid: 'msg_1', messageId: '<rfc-1@x>',
+      subject: '统计销售数据',
+      from: { value: [{ address: 'boss@corp.com' }] },
+      to: { value: [{ address: 'bot@agent.qq.com' }] },
+      cc: { value: [{ address: 'team@corp.com' }] },
+      text: '统计上个月的数据',
+      attachments: [],
+    }],
+    onHarnessAsk: (call) => { seen.push(call); },
+  });
+  await runtime.start();
+  await waitFor(
+    () => seen.length > 0,
+    () => 'the mail never reached the Harness',
+  );
+
+  // `ask` is called positionally, so the helper records the prompt as `text`.
+  const prompt = String(seen[0].text ?? '');
+  assert.match(prompt, /Subject: 统计销售数据/, 'the subject reaches the model');
+  assert.match(prompt, /From: boss@corp\.com/, 'the sender reaches the model');
+  assert.match(prompt, /To: bot@agent\.qq\.com/, 'the recipients reach the model');
+  assert.match(prompt, /Cc: team@corp\.com/, 'the cc list reaches the model');
+  assert.match(prompt, /统计上个月的数据/, 'the body is still there');
+  // The parser must not see the decoration: a command in the body still works.
+  assert.equal(state.hasSeen('<rfc-1@x>'), true);
+});

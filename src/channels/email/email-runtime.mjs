@@ -200,8 +200,15 @@ export function normalizeEmail(parsed, { address, state } = {}) {
       // attachment type under any other key is silently dropped.
       ...(attachment.contentType ? { mediaType: String(attachment.contentType) } : {}),
       // The bridge streams files via a loader so large attachments are not
-      // held in memory until they are actually needed.
-      load: async () => attachment.content,
+      // held in memory until they are actually needed. Transports differ in
+      // what `content` is: IMAP hands over a Buffer (already fetched with the
+      // body), while the Agent mailbox can only fetch bytes on demand and so
+      // exposes a function. Returning that function unchanged made the loader
+      // resolve to a function, which the inbound-file layer rejects as
+      // `inbound-file-data-invalid` — the download never happened.
+      load: async () => (typeof attachment.content === 'function'
+        ? attachment.content()
+        : attachment.content),
     })),
     reactionTarget: null,
     replyTarget: {
