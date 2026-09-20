@@ -280,6 +280,60 @@ test('A11b: an unknown final-answer failure is not re-sent and keeps the unknown
   assert.equal(result.presentation, 'telegram-thinking');
 });
 
+test('A11c: a rejected middle plain chunk retries only the unchanged unsent tail', async () => {
+  const attempts = [];
+  const delivered = [];
+  const api = {
+    sendMessage: async ({ text }) => {
+      attempts.push(text);
+      if (attempts.length === 2) {
+        throw Object.assign(new Error('Telegram rejected the chunk'), {
+          code: 'telegram-400', providerCode: 400, status: 400,
+        });
+      }
+      delivered.push(text);
+      return { message_id: 4100 + attempts.length };
+    },
+  };
+  const client = new TelegramBotClient({ api, logger: quietLogger });
+  const stream = client.openThinkingStream({ chatId: 42 });
+  const answer = 'a'.repeat(4000) + 'b'.repeat(3999) + '😀\n\n\n    tail' + 'c'.repeat(1000);
+  const result = await stream.finish({ text: answer, format: 'plain' });
+
+  assert.equal(result.deliveryOutcome, 'sent');
+  assert.equal(attempts.length, 4, 'one rejected chunk followed by its unsent tail');
+  assert.equal(attempts.filter((text) => text === delivered[0]).length, 1,
+    'the confirmed first chunk must never be retried');
+  assert.equal(delivered.join('').length, answer.length, 'retry must not add separators');
+  assert.equal(delivered.join(''), answer, 'whitespace, indentation, and Unicode stay intact');
+  assert.ok(delivered.every((text) => text.length <= 4000 && text.isWellFormed()));
+  assert.deepEqual(result.providerMessageIds, ['4101', '4103', '4104']);
+});
+
+test('A11d: an unknown middle plain chunk stops without retrying or sending the tail', async () => {
+  const attempts = [];
+  const api = {
+    sendMessage: async ({ text }) => {
+      attempts.push(text);
+      if (attempts.length === 2) {
+        throw Object.assign(new Error('Telegram response timed out'), {
+          code: 'telegram-timeout', deliveryOutcome: 'unknown',
+        });
+      }
+      return { message_id: 4200 + attempts.length };
+    },
+  };
+  const client = new TelegramBotClient({ api, logger: quietLogger });
+  const stream = client.openThinkingStream({ chatId: 42 });
+  const answer = 'a'.repeat(4000) + 'b'.repeat(4000) + 'c'.repeat(1000);
+  const result = await stream.finish({ text: answer, format: 'plain' });
+
+  assert.deepEqual(attempts, ['a'.repeat(4000), 'b'.repeat(4000)]);
+  assert.equal(result.deliveryOutcome, 'unknown');
+  assert.equal(result.reason, 'telegram-timeout');
+  assert.deepEqual(result.providerMessageIds, ['4201']);
+});
+
 test('A12: a markdown final answer is delivered through the rich path', async () => {
   const plain = [];
   const rich = [];

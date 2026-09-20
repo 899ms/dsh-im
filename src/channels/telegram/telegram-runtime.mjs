@@ -1082,7 +1082,8 @@ export class TelegramBotClient {
           }
           warnFailure('final answer chunk', new Error('chunk definitively rejected'));
           try {
-            const fallback = await client.sendText(target, chunks.slice(index).join('\n\n'));
+            // Regular-text chunks already retain the original whitespace.
+            const fallback = await client.sendText(target, chunks.slice(index).join(''));
             remember(fallback.providerMessageIds);
             return deliveryResult('telegram-thinking', providerMessageIds);
           } catch (error) {
