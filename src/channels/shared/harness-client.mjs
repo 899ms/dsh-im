@@ -542,6 +542,8 @@ export class HarnessReplyTracker {
   #toolNames = new Map();
   #lastToolName = null;
   #transientSeqs = new Set();
+  #pendingReasoning = new Map();
+  #pendingReasoningChars = 0;
   #reasoning = false;
 
   constructor({ promptRpcId, afterSeq = -1, reasoning = false }) {
@@ -584,6 +586,34 @@ export class HarnessReplyTracker {
     pushUpdate({ type: 'text', text });
   }
 
+  #bufferReasoning(event) {
+    const text = event.data?.chunk?.text;
+    if (typeof text !== 'string' || !text || text.length > 65536
+      || this.#pendingReasoning.has(event.seq)) return;
+    this.#pendingReasoning.set(event.seq, event);
+    this.#pendingReasoningChars += text.length;
+    while (this.#pendingReasoning.size > 256 || this.#pendingReasoningChars > 65536) {
+      const [seq, oldest] = this.#pendingReasoning.entries().next().value;
+      this.#pendingReasoning.delete(seq);
+      this.#pendingReasoningChars -= oldest.data.chunk.text.length;
+    }
+  }
+
+  #takePendingReasoning() {
+    const events = [...this.#pendingReasoning.values()];
+    this.#pendingReasoning.clear();
+    this.#pendingReasoningChars = 0;
+    return events;
+  }
+
+  #emitReasoning(event, pushUpdate) {
+    const text = event.data?.chunk?.text;
+    if (event.data?.turn !== this.#targetTurn || this.#transientSeqs.has(event.seq)
+      || typeof text !== 'string' || !text) return;
+    this.#transientSeqs.add(event.seq);
+    pushUpdate({ type: 'reasoning', turn: this.#targetTurn, text });
+  }
+
   consumeAll(entries, { live = false, fromMux = false } = {}) {
     const updates = [];
     // 同一批轮询内的 text 帧只保留最新累积，其余事件逐帧透出，
@@ -598,34 +628,26 @@ export class HarnessReplyTracker {
       }
       updates.push(update);
     };
-    const ordered = [...entries]
+    const ordered = [...(fromMux ? [] : this.#takePendingReasoning()), ...entries]
       .map((entry) => entry?.event ?? entry)
       .filter(Boolean)
       .sort((left, right) => (left.seq ?? -1) - (right.seq ?? -1));
 
     for (const event of ordered) {
+      if (this.#finished) break;
       const seq = event.seq ?? -1;
-      const lateReasoningChunk = event.type === 'assistant/chunk'
-        && event.data?.chunk?.type === 'reasoning-delta'
-        && Number.isFinite(seq)
-        && !Number.isInteger(seq);
+      const isReasoning = event.type === 'assistant/chunk'
+        && event.data?.chunk?.type === 'reasoning-delta';
+      // The mux is lossy across reconnects. Only history may advance the
+      // durable cursor or finish the reply; the mux supplements reasoning.
+      if (fromMux && !isReasoning) continue;
+      if (isReasoning) {
+        if (!live || !Number.isFinite(seq)) continue;
+        if (this.#targetTurn === null) this.#bufferReasoning(event);
+        else this.#emitReasoning(event, pushUpdate);
+        continue;
+      }
       if (this.#targetTurn === null) {
-        // Reasoning streams before the durable user/message binds the turn
-        // (order: turn/start, step/start, reasoning, user/message). Gating it
-        // on binding drops the thinking entirely. Live reasoning frames carry
-        // their own turn and a transient (fractional) seq, so surface them by
-        // that turn without advancing #lastSeq — the reconnect guard for
-        // durable events stays intact, and the consumer opens the run lazily.
-        if (live && lateReasoningChunk) {
-          if (this.#transientSeqs.has(seq)) continue;
-          this.#transientSeqs.add(seq);
-          const text = event.data?.chunk?.text;
-          const turn = event.data?.turn ?? this.#openTurn;
-          if (typeof text === 'string' && text && turn !== null && turn !== undefined) {
-            pushUpdate({ type: 'reasoning', turn, text });
-          }
-          continue;
-        }
         if (seq <= this.#lastSeq) continue;
         if (event.type === 'turn/start') {
           this.#openTurn = event.data?.turn ?? null;
@@ -634,32 +656,19 @@ export class HarnessReplyTracker {
         if (event.type === 'user/message' && event.data?.source?.rpcId === this.#promptRpcId) {
           this.#lastSeq = seq;
           this.#targetTurn = event.data?.turn ?? this.#openTurn;
-          if (live) pushUpdate({ type: 'turn-start', turn: this.#targetTurn });
+          if (live && this.#targetTurn !== null) {
+            pushUpdate({ type: 'turn-start', turn: this.#targetTurn });
+            // Only earlier fragments flush here. Later steps remain in the
+            // sorted batch, interleaved with their tool calls and results.
+            for (const pending of this.#takePendingReasoning()) {
+              this.#emitReasoning(pending, pushUpdate);
+            }
+          }
         }
         continue;
       }
-      // A turn/end delivered over the mux can outrun the history backfill of
-      // the durable events it trails (e.g. the final assistant message).
-      // Advancing the watermark to its seq would make `seq <= lastSeq` drop
-      // those pending events, losing the final answer. Only defer such a mux
-      // end across the gap; the authoritative, ordered history poll fills the
-      // hole and then redelivers the end. A history end is never deferred, so a
-      // failed turn with no trailing answer still finishes immediately.
-      if (fromMux
-        && event.type === 'turn/end'
-        && event.data?.turn === this.#targetTurn
-        && Number.isInteger(seq)
-        && seq > this.#lastSeq + 1) {
-        continue;
-      }
-
-      if (lateReasoningChunk) {
-        if (this.#transientSeqs.has(seq)) continue;
-        this.#transientSeqs.add(seq);
-      } else {
-        if (seq <= this.#lastSeq) continue;
-        this.#lastSeq = seq;
-      }
+      if (seq <= this.#lastSeq) continue;
+      this.#lastSeq = seq;
 
       if (event.type === 'turn/start') this.#openTurn = event.data?.turn ?? null;
 
@@ -685,16 +694,6 @@ export class HarnessReplyTracker {
         continue;
       }
       if (event.data?.turn !== this.#targetTurn) continue;
-
-      if (live
-        && event.type === 'assistant/chunk'
-        && event.data?.chunk?.type === 'reasoning-delta') {
-        const text = event.data.chunk.text;
-        if (typeof text === 'string' && text) {
-          pushUpdate({ type: 'reasoning', turn: this.#targetTurn, text });
-        }
-        continue;
-      }
 
       if (event.type === 'assistant/chunk' && event.data?.chunk?.type === 'text-delta') {
         const step = event.data?.step ?? 0;

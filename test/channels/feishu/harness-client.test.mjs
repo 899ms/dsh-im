@@ -1664,13 +1664,12 @@ test('ask() publishes the guidance a channel captured and never reads the prompt
   assert.equal(imSourceGuidance.get(sessionId), undefined);
 });
 
-test('tracker surfaces live reasoning that streams before the turn binds', () => {
+test('tracker retains early live reasoning until the request binds its turn', () => {
   const tracker = new HarnessReplyTracker({ promptRpcId: 'rpc-early', afterSeq: 0 });
 
   // Reasoning streams before the durable user/message binds the turn
   // (order: turn/start, step/start, reasoning, user/message). It must still
-  // surface, using the turn carried on the event, without advancing lastSeq —
-  // otherwise Live process mode shows tool calls but drops the thinking text.
+  // wait for the matching request before surfacing, without advancing lastSeq.
   const early = tracker.consumeAll([
     { type: 'turn/start', seq: 1, data: { turn: 7 } },
     { type: 'assistant/chunk', seq: 1.5, data: {
@@ -1680,9 +1679,7 @@ test('tracker surfaces live reasoning that streams before the turn binds', () =>
     } },
   ], { live: true });
 
-  assert.deepEqual(early, [
-    { type: 'reasoning', turn: 7, text: '绑定前推理' },
-  ]);
+  assert.deepEqual(early, []);
   // The transient (fractional) frame must not touch the durable cursor,
   // so the reconnect guard for durable events stays intact.
   assert.equal(tracker.lastSeq, 0);
@@ -1709,6 +1706,7 @@ test('tracker surfaces live reasoning that streams before the turn binds', () =>
 
   assert.deepEqual(bound, [
     { type: 'turn-start', turn: 7 },
+    { type: 'reasoning', turn: 7, text: '绑定前推理' },
     { type: 'reasoning', turn: 7, text: '绑定后推理' },
     { type: 'turn-end', turn: 7, reason: { kind: 'completed' } },
   ]);

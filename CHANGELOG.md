@@ -9,7 +9,12 @@ This file records the notable changes in each dsh-im release. Its format follows
 ### Added / 新增
 
 - 飞书任务过程展示新增「实时直播」，使用飞书原生思考过程消息实时呈现推理、工具调用、参数和结果，最终答案仍以普通富文本消息单独发送。实时事件通过 Harness mux 传递并与历史记录去重，过程写入采用非阻塞批处理；原生过程不可用时不影响最终答案投递。
-  Feishu task progress gains a Live process mode backed by native thinking-process messages, streaming reasoning, tool calls, arguments, and results while keeping the final answer in a separate rich-text message. Live events travel through the Harness mux with history deduplication and non-blocking batched writes; native process failures do not suppress the final answer.
+  Feishu task progress gains a Live process mode backed by native thinking-process messages, streaming reasoning, tool calls, arguments, and results while keeping the final answer in a separate rich-text message. Native process failures do not suppress the final answer. Thanks to [@ShawnKung](https://github.com/ShawnKung) ([#224](https://github.com/xmanrui/dsh-im/pull/224)).
+
+### Fixed / 修复
+
+- 实时直播改由现有历史轮询处理工具事件、最终答案和任务结束，避免断线重连后的较新事件使补回的答案被跳过。提前到达的推理片段在确认当前请求所属回合后才展示，并限制暂存大小，避免排队请求串入上一轮推理。
+  Live process mode now uses existing history polling for tool events, final answers, and completion so newer mux events cannot skip answers recovered after a reconnect. Early reasoning is buffered within fixed bounds and displayed only after its turn is correlated with the current request, excluding reasoning from other queued turns.
 
 ## [4.23.0] - 2026-09-20
 
