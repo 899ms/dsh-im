@@ -3,7 +3,7 @@ import { BotName } from '../../bot-alias.js';
 import * as React from 'react';
 
 import { CredentialActionIcon, CredentialBindingPanel } from '../../credential-binding.js';
-import { CollapsibleAccountSection } from './collapsible-account.js';
+import { AccountSettingsToggle, CollapsibleAccountSection } from './collapsible-account.js';
 import { h } from '../../i18n.js';
 import { installDingtalkStyles } from '../dingtalk/styles.js';
 import { WorkspaceEditor } from '../../workspace-editor.js';
@@ -92,6 +92,13 @@ export function createTokenChannelSettings(definition) {
     return h('article', { className: 'ddt-card dim-botCard', 'data-bot-id': account.botId },
       h('div', { className: 'ddt-cardBody dim-botCardBody' },
         h(CollapsibleAccountSection, {
+          settings: h(BotSettingsButton, {
+            channel: channel.toLowerCase(),
+            botId: account.botId,
+            botName: account.bot.name,
+            connected: account.connected,
+            accessPolicy: account.accessPolicy,
+          }),
           id: `tok-settings-${account.botId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
           header: h('div', { className: 'ddt-accountTop dim-botCardTop' },
             h('div', { className: 'ddt-accountIdentity dim-botIdentity' },
@@ -113,13 +120,7 @@ export function createTokenChannelSettings(definition) {
                 lastCheckedAt: account.health.lastCheckedAt,
                 formatCheckedTime: checkedTime,
               }),
-              h(BotSettingsButton, {
-                channel: channel.toLowerCase(),
-                botId: account.botId,
-                botName: account.bot.name,
-                connected: account.connected,
-                accessPolicy: account.accessPolicy,
-              }))),
+              h(AccountSettingsToggle))),
         },
           h(WorkspaceEditor, {
             workspace: account.workspace,

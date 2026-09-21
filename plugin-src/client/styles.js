@@ -417,10 +417,15 @@ const CSS = String.raw`
 .dim-panel .dim-botCardBody { position: relative; min-width: 0; width: 100%; max-width: 100%; padding: 12px 8px; }
 .dim-collapsibleAccount { min-width: 0; display: flex; flex-direction: column; }
 .dim-collapsibleHead { min-width: 0; display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; -webkit-user-select: none; }
-.dim-collapsibleHead:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3370ff); outline-offset: 2px; border-radius: 8px; }
 .dim-collapsibleHeaderContent { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; }
-.dim-collapsibleChevron { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 9px; height: 9px; border-right: 1.6px solid var(--dsw-alias-label-tertiary, #8f959e); border-bottom: 1.6px solid var(--dsw-alias-label-tertiary, #8f959e); transform: rotate(-45deg); transition: transform .22s cubic-bezier(.4, 0, .2, 1); transform-origin: 50% 50%; }
-.dim-collapsibleAccount.is-open .dim-collapsibleChevron { transform: rotate(45deg); }
+/* Keep the original header footprint; center both icons with equal side space. */
+.dim-accountSettingsToggle { flex: none; width: 45px; height: 32px; display: inline-flex; gap: 5px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 8px; color: var(--dsw-alias-state-business-primary, #3370ff); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #3370ff) 8%, var(--dsw-alias-bg-layer-1, #fff)); cursor: pointer; }
+.dim-accountSettingsToggle > svg { flex: none; display: block; }
+.dim-accountSettingsToggle:hover { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #3370ff) 14%, var(--dsw-alias-bg-layer-1, #fff)); }
+.dim-accountSettingsToggle:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3370ff); outline-offset: 2px; }
+.dim-collapsibleChevron { width: 12px; height: 16px; transition: transform .22s cubic-bezier(.4, 0, .2, 1); transform-origin: 50% 50%; }
+.dim-accountSettingsToggle[aria-expanded="true"] .dim-collapsibleChevron { transform: rotate(180deg); }
+.dim-accountSettingsHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--dsw-alias-border-l2, #e5e6eb); color: var(--dsw-alias-label-secondary, #646a73); font-size: 12px; }
 /* Animate height without measuring content; hide collapsed controls from focus and accessibility. */
 .dim-collapsibleBody { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .22s cubic-bezier(.4, 0, .2, 1); }
 .dim-collapsibleAccount.is-open > .dim-collapsibleBody { grid-template-rows: 1fr; }
@@ -445,11 +450,10 @@ const CSS = String.raw`
 .dim-panel .dim-botCard .dim-healthDot[data-tone="warning"] { background: var(--dsw-alias-state-warn-primary, #d97706); }
 .dim-panel .dim-botCard .dim-healthDot[data-tone="error"] { background: var(--dsw-alias-state-error-primary, #d54941); }
 .dim-botSettingsAction { position: relative; flex: none; display: inline-flex; }
-.dim-botSettingsButton { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; color: var(--dsw-alias-label-secondary, #646a73); background: transparent; cursor: pointer; transition: color .15s ease, background .15s ease; }
+.dim-botSettingsButton { min-height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; border: 0; border-radius: 8px; color: var(--dsw-alias-state-business-primary, #3370ff); background: transparent; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; transition: color .15s ease, background .15s ease; }
 .dim-botSettingsButton:hover { color: var(--dsw-alias-label-primary, #1f2329); background: var(--dsw-alias-interactive-bg-hover, #eef0f3); }
 .dim-botSettingsButton:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3370ff); outline-offset: 2px; }
-.dim-botSettingsTooltip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: max-content; padding: 6px 9px; border: 1px solid var(--dsw-alias-border-l2, #dfe1e5); border-radius: 7px; color: var(--dsw-alias-label-primary, #1f2329); background: var(--dsw-alias-bg-layer-3, #fff); box-shadow: 0 8px 24px rgb(31 35 41 / 14%); font-size: 11px; line-height: 16px; opacity: 0; visibility: hidden; transform: translateY(-3px); pointer-events: none; transition: opacity .15s ease, transform .15s ease, visibility .15s ease; }
-.dim-botSettingsAction:hover .dim-botSettingsTooltip, .dim-botSettingsAction:focus-within .dim-botSettingsTooltip { opacity: 1; visibility: visible; transform: translateY(0); }
+.dim-moreSettingsChevron { width: 6px; height: 6px; margin-right: 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
 .dim-deliveryPage { min-width: 0; display: grid; }
 .dim-deliveryHeader { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .dim-botSettingsTabsBar { min-width: 0; margin-top: 10px; border-bottom: 1px solid var(--dsw-alias-border-l2, #dfe1e5); }

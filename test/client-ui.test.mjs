@@ -173,11 +173,12 @@ test('removing the first account preserves collapse styles and toggling for rema
     act(() => renderer.update(cards(['second'])));
     assert.equal(collapseStyles(), stylesheet, 'remaining cards still need the shared collapse CSS');
     const header = () => renderer.root.findByProps({ className: 'dim-collapsibleHead' });
-    assert.equal(header().props['aria-expanded'], 'false');
+    const toggle = () => renderer.root.findByProps({ className: 'dim-accountSettingsToggle' });
+    assert.equal(toggle().props['aria-expanded'], 'false');
     act(() => header().props.onClick());
-    assert.equal(header().props['aria-expanded'], 'true');
-    act(() => header().props.onClick());
-    assert.equal(header().props['aria-expanded'], 'false');
+    assert.equal(toggle().props['aria-expanded'], 'true');
+    act(() => toggle().props.onClick({ stopPropagation() {} }));
+    assert.equal(toggle().props['aria-expanded'], 'false');
 
     act(() => renderer.unmount());
     disposeStyles();

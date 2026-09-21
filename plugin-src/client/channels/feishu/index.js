@@ -4,7 +4,7 @@ import * as React from "react";
 
 import { FeishuLogoGlyph } from "../../channel-logos.js";
 import { CredentialActionIcon, CredentialBindingPanel, QrActionIcon } from "../../credential-binding.js";
-import { CollapsibleAccountSection } from "../shared/collapsible-account.js";
+import { AccountSettingsToggle, CollapsibleAccountSection } from "../shared/collapsible-account.js";
 import { h } from "../../i18n.js";
 import {
   FEISHU_ENDPOINTS,
@@ -600,6 +600,18 @@ export function BotCard({
   },
     h("div", { className: "bxf-cardBody dim-botCardBody" },
       h(CollapsibleAccountSection, {
+        settings: h(BotSettingsButton, {
+          channel: "feishu",
+          botId: connection.botId,
+          botName: bot.name,
+          connected,
+          accessPolicy: connection.accessPolicy,
+          channelSettings: {
+            groupResponseMode: connection.groupResponseMode,
+            groupTopicReply: connection.groupTopicReply,
+            groupMessagePermissionGranted: connection.groupMessagePermissionGranted,
+          },
+        }),
         id: `bxf-settings-${connection.botId.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
         header: h("div", { className: "bxf-connectedTop dim-botCardTop" },
           h("div", { className: "bxf-botIdentity dim-botIdentity" },
@@ -624,18 +636,7 @@ export function BotCard({
               formatCheckedTime,
               healthState: stateForDisplay,
             }),
-            h(BotSettingsButton, {
-              channel: "feishu",
-              botId: connection.botId,
-              botName: bot.name,
-              connected,
-              accessPolicy: connection.accessPolicy,
-              channelSettings: {
-                groupResponseMode: connection.groupResponseMode,
-                groupTopicReply: connection.groupTopicReply,
-                groupMessagePermissionGranted: connection.groupMessagePermissionGranted,
-              },
-            }))),
+            h(AccountSettingsToggle))),
       },
         h(WorkspaceEditor, {
           workspace: connection.workspace,

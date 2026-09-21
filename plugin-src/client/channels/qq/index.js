@@ -4,7 +4,7 @@ import * as React from 'react';
 
 import { QqLogoGlyph } from '../../channel-logos.js';
 import { CredentialActionIcon, CredentialBindingPanel, QrActionIcon } from '../../credential-binding.js';
-import { CollapsibleAccountSection } from '../shared/collapsible-account.js';
+import { AccountSettingsToggle, CollapsibleAccountSection } from '../shared/collapsible-account.js';
 import { h } from '../../i18n.js';
 import { WorkspaceEditor } from '../../workspace-editor.js';
 import { ContextEnhancementEditor } from '../../context-enhancement.js';
@@ -189,6 +189,13 @@ export function AccountCard({
   return h('article', { className: 'ddt-card dim-botCard', 'data-bot-id': account.botId },
     h('div', { className: 'ddt-cardBody dim-botCardBody' },
       h(CollapsibleAccountSection, {
+        settings: h(BotSettingsButton, {
+          channel: 'qq',
+          botId: account.botId,
+          botName: account.bot.name,
+          connected: account.connected,
+          accessPolicy: account.accessPolicy,
+        }),
         id: `qq-settings-${account.botId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
         header: h('div', { className: 'ddt-accountTop dim-botCardTop' },
         h('div', { className: 'ddt-accountIdentity dim-botIdentity' },
@@ -209,13 +216,7 @@ export function AccountCard({
             lastCheckedAt: account.health.lastCheckedAt,
             formatCheckedTime: checkedTime,
           }),
-          h(BotSettingsButton, {
-            channel: 'qq',
-            botId: account.botId,
-            botName: account.bot.name,
-            connected: account.connected,
-            accessPolicy: account.accessPolicy,
-          })))
+          h(AccountSettingsToggle)))
       },
         h(WorkspaceEditor, {
         workspace: account.workspace,
