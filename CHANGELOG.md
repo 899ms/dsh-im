@@ -6,10 +6,24 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.24.1] - 2026-09-22
+
 ### Fixed / 修复
 
 - 飞书话题首文在同一 AI 会话成功使用后不再重复注入；命令、拒绝消息及读取或请求失败不提前消耗首文，`/new`、会话切换或失效重建后重新附带。普通群聊和私聊的主动引用保持原有行为。感谢 [@yangzhe1991](https://github.com/yangzhe1991) 提出并实现首文去重（[#222](https://github.com/xmanrui/dsh-im/pull/222)）。
   Feishu topic roots are no longer injected repeatedly after a successful turn in the same AI session. Commands, rejected messages, and failed lookups or requests do not consume the root; new, switched, or rebuilt sessions receive it again. Explicit quotes in ordinary groups and direct chats retain their existing behavior. Thanks to [@yangzhe1991](https://github.com/yangzhe1991) for proposing and implementing topic-root deduplication ([#222](https://github.com/xmanrui/dsh-im/pull/222)).
+
+- 修复通过终端或插件市场升级、回退后，历史更新记录持续阻止后续安装的问题。重启 Host 后，在无安装锁、当前安装校验通过且运行版本与已安装版本一致时重新判定可恢复状态；不删除历史记录，也不绕过安装锁、版本兼容性、确认有效期或手动重启要求。
+  Fixed historical update jobs blocking later installs after an external upgrade or rollback. After restarting the Host, recovery is derived from a valid current installation with no install lock and matching running/installed versions. History remains intact, and install locks, compatibility checks, confirmation expiry, and manual-restart requirements remain enforced.
+- 更新面板优先展示本次检查结果，区分「最新版本」「上次更新目标」与正在安装的「目标版本」，避免旧任务遮盖新版本或错误状态；打开符合条件的面板时重新检查更新，手动命令不再沿用可恢复历史任务的旧目标。已被旧版更新器阻塞的用户，需先通过手动命令或插件市场安装含修复的版本，再手动重启 Host。
+  The update panel now prioritizes fresh checks and distinguishes Latest version, Previous update target, and an active Target version, so old jobs cannot hide available updates or errors. Eligible panel openings check again, and manual commands ignore recoverable historical targets. Users already blocked by the old updater must first install a fixed version through the manual command or plugin market, then restart the Host manually.
+
+### Changed / 变更
+
+- 统一机器人卡片设置入口：卡片顶部使用齿轮与箭头展开或收起常用配置，「更多设置」移入展开区域；调整图标间距，保留键盘操作、展开状态提示及收起后隐藏控件的无障碍行为。
+  Unified bot-card settings entry points: a gear-and-chevron control expands or collapses common settings, with More settings inside the expanded area. Balanced icon spacing while preserving keyboard interaction, expanded-state announcements, and accessibility hiding for collapsed controls.
+- 补充飞书话题首文去重贡献者信息，并完善飞书实时直播功能对 [@ShawnKung](https://github.com/ShawnKung) 的文档致谢（[#243](https://github.com/xmanrui/dsh-im/pull/243)）。
+  Added contributor credits for Feishu topic-root deduplication and completed the documentation attribution to [@ShawnKung](https://github.com/ShawnKung) for Feishu Live process mode ([#243](https://github.com/xmanrui/dsh-im/pull/243)).
 
 ## [4.24.0] - 2026-09-21
 
@@ -1176,7 +1190,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.24.0...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.24.1...HEAD
+[4.24.1]: https://github.com/xmanrui/dsh-im/compare/v4.24.0...v4.24.1
 [4.24.0]: https://github.com/xmanrui/dsh-im/compare/v4.23.0...v4.24.0
 [4.23.0]: https://github.com/xmanrui/dsh-im/compare/v4.22.0...v4.23.0
 [4.22.0]: https://github.com/xmanrui/dsh-im/compare/v4.21.2...v4.22.0
