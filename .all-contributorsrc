@@ -591,6 +591,26 @@
       ]
     },
     {
+      "login": "ShawnKung",
+      "name": "ShawnKung",
+      "avatar_url": "https://avatars.githubusercontent.com/u/42027195",
+      "profile": "https://github.com/ShawnKung",
+      "contributions": [
+        {
+          "type": "code",
+          "url": "https://github.com/xmanrui/dsh-im/pull/224"
+        },
+        {
+          "type": "doc",
+          "url": "https://github.com/xmanrui/dsh-im/pull/224"
+        },
+        {
+          "type": "test",
+          "url": "https://github.com/xmanrui/dsh-im/pull/224"
+        }
+      ]
+    },
+    {
       "login": "trae-agent",
       "name": "Trae",
       "avatar_url": "https://avatars.githubusercontent.com/u/220387035",
