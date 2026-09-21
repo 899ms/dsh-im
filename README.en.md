@@ -64,6 +64,7 @@ Connect IM bots to DeepSeek Harness by scanning a QR code, using an App Manifest
 | Discord | Enter a Bot Token generated in the Developer Portal | Gateway v10 connection; direct DM replies; the first mention in a server text or announcement channel creates a native Thread, where follow-up messages no longer need to mention the bot; replies stream through message edits |
 | WhatsApp | Scan a QR code with mobile WhatsApp to link a device | WhatsApp Web connection; self-chat only by default, with optional selected-contact and open-response modes; read receipt and typing indicator, with tool progress and incremental answers shown by editing one message at one-second intervals; long replies split automatically and failed edits fall back to a complete text reply |
 | iMessage | Sign in to iMessage in macOS Messages.app and grant the local permissions described in the [channel notes](docs/imessage.md) | Native macOS Messages.app transport for text DMs; no BlueBubbles or third-party gateway; one local iMessage identity per macOS user account |
+| Matrix | Enter the homeserver URL plus an access token, or a user id with a password | CS API long polling; DMs are answered directly and rooms answer when the bot is @-mentioned, with thread replies, HTML-whitelist rich text and edit-based streaming, and image/result-file delivery; end-to-end-encrypted rooms are currently skipped with a visible notice |
 
 Other IM platforms can be added through the same channel-adapter structure.
 The iMessage contribution is documented separately in [the iMessage channel
@@ -97,6 +98,7 @@ After the model calls the file-return tool, the plugin hands the specified file 
 | Telegram | The bot must be allowed to send documents in the current chat; the Bot API response determines the actual range. |
 | Discord | Enable **Message Content Intent** in the Developer Portal. The bot needs **Send Messages**, **Create Public Threads**, **Send Messages in Threads**, and **Read Message History**; result-file delivery also requires **Attach Files**. The current account and server capability determine the actual attachment allowance. |
 | WhatsApp | The linked session must support Document Messages; the WhatsApp/Baileys response determines the actual range. |
+| Matrix | The homeserver must allow media uploads; its media repository configuration decides the real per-file limit. When an upload is rejected, the plugin asks you to check the media size limit and upload permissions. |
 
 ## AI Office Connector
 
@@ -235,9 +237,9 @@ Startup configuration validation failures also include `file`, `field`, and `iss
 - Registers one top-level **IM Bot** settings page containing the built-in IM channels and one AI Office Connector.
 - Maintains the Host, client, and runtime sources for the built-in channels and the Office Connector in this repository without external standalone plugins.
 - Follows the DeepSeek Harness language preference and switches the settings UI live between Chinese and English. Bot chat messages, command help, and the Telegram command menu follow the same interface language and switch live, with Chinese always as the fallback so untranslated text is sent verbatim.
-- Uses logos for WeChat, Feishu, DingTalk, WeCom, QQ, Slack, Telegram, Discord, WhatsApp, iMessage, and AI Office navigation without enable/disable switches.
+- Uses logos for WeChat, Feishu, DingTalk, WeCom, QQ, Slack, Telegram, Discord, WhatsApp, iMessage, Matrix, and AI Office navigation without enable/disable switches.
 - Keeps RPC endpoints, credentials, connection supervision, and session mappings isolated by IM channel; the Office Connector separately owns Device credentials, Job leases, approval waits, and concurrency limits.
-- Returns only QR codes, the public Slack Manifest, redacted status data, and access modes or allowlist identifiers explicitly saved for the current Telegram or WhatsApp bot. Manually entered secrets and Tokens travel one way to the local Host; no RPC response returns App Secrets, `bot_token`, DingTalk `client_secret`, WeCom Secrets, QQ `app_secret`, Slack Bot/App Tokens, Telegram/Discord Bot Tokens, WhatsApp linked-device keys, AI Office Device Tokens, or other raw user identifiers observed from platform messages.
+- Returns only QR codes, the public Slack Manifest, redacted status data, and access modes or allowlist identifiers explicitly saved for the current Telegram or WhatsApp bot. Manually entered secrets and Tokens travel one way to the local Host; no RPC response returns App Secrets, `bot_token`, DingTalk `client_secret`, WeCom Secrets, QQ `app_secret`, Slack Bot/App Tokens, Telegram/Discord Bot Tokens, WhatsApp linked-device keys, Matrix access tokens and passwords, AI Office Device Tokens, or other raw user identifiers observed from platform messages.
 
 ## Local development
 

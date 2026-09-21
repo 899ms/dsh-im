@@ -1,7 +1,7 @@
 {
   "name": "@xmanrui/dsh-im",
   "version": "4.20.2",
-  "description": "把十一种 IM 渠道和公网 AI Office 接入本机 DeepSeek Harness。 Connect eleven IM channels and a public AI Office to a local DeepSeek Harness.",
+  "description": "把十二种 IM 渠道和公网 AI Office 接入本机 DeepSeek Harness。 Connect twelve IM channels and a public AI Office to a local DeepSeek Harness.",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -21,6 +21,7 @@
     "discord",
     "whatsapp",
     "imessage",
+    "matrix",
     "ai-office"
   ],
   "author": "xmanrui (https://github.com/xmanrui)",
@@ -144,6 +145,7 @@
     "node": ">=22.19"
   },
   "dependencies": {
+    "@matrix-org/olm": "3.2.15",
     "@tencent-connect/qqbot-connector": "1.2.0",
     "@tencent-connect/qqbot-nodejs": "1.0.4",
     "@wecom/aibot-node-sdk": "1.0.7",

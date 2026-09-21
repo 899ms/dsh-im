@@ -190,7 +190,7 @@ test('removing the first account preserves collapse styles and toggling for rema
   }
 });
 
-test('IM settings renders eleven IM channels plus the AI Office connector', async () => {
+test('IM settings renders twelve IM channels plus the AI Office connector', async () => {
   const { default: packageMetadata } = await import('../package.json', {
     with: { type: 'json' },
   });
@@ -271,6 +271,7 @@ test('IM settings renders eleven IM channels plus the AI Office connector', asyn
   assert.match(markup, />Discord</);
   assert.match(markup, />WhatsApp</);
   assert.match(markup, />iMessage</);
+  assert.match(markup, />Matrix</);
   assert.match(markup, />AI Office<\/strong><small class="dim-channelNote">（实验功能）<\/small>/);
   assert.match(markup, /dim-logoWeixin/);
   assert.match(markup, /dim-logoFeishu/);
@@ -282,9 +283,10 @@ test('IM settings renders eleven IM channels plus the AI Office connector', asyn
   assert.match(markup, /dim-logoDiscord/);
   assert.match(markup, /dim-logoWhatsapp/);
   assert.match(markup, /dim-logoIMessage/);
+  assert.match(markup, /dim-logoMatrix/);
   assert.match(markup, /dim-logoOffice/);
   assert.match(styles, /\.dim-logoFeishu svg \{ width: 28px; height: 28px; \}/);
-  assert.equal((markup.match(/role="tab"/g) ?? []).length, 12);
+  assert.equal((markup.match(/role="tab"/g) ?? []).length, 13);
   assert.equal((markup.match(/aria-selected="true"/g) ?? []).length, 1);
   assert.doesNotMatch(markup, /role="switch"|type="checkbox"/);
   assert.doesNotMatch(markup, /dim-chevron|扫码绑定<\/small>|扫码接入<\/small>/);

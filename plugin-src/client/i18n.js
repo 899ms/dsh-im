@@ -659,6 +659,22 @@ const EN = Object.freeze({
   'Gateway 长连接': 'Gateway persistent connection',
   ' Socket Mode 长连接': ' Socket Mode persistent connection',
   'Socket Mode 长连接': 'Socket Mode persistent connection',
+  ' CS API 长轮询': ' CS API long polling',
+  'CS API 长轮询': 'CS API long polling',
+  '接入 Matrix 机器人': 'Connect a Matrix bot',
+  '连接你的 Matrix homeserver': 'Connect your Matrix homeserver',
+  '填写 homeserver 地址，并提供访问令牌，或者用户 ID 与密码的组合。机器人只访问该 homeserver，不连接第三方服务器。':
+    'Enter the homeserver URL plus an access token, or a user id with a password. The bot only talks to that homeserver and never to third-party servers.',
+  'Homeserver 地址': 'Homeserver URL',
+  '访问令牌（与用户 ID、密码二选一）': 'Access token (or user id + password)',
+  '用户 ID（可选）': 'User id (optional)',
+  '密码（可选）': 'Password (optional)',
+  '访问令牌来自 Element 设置 → 帮助 → 编辑设置，或 homeserver 的登录接口；用户 ID 与密码方式会为本安装派生稳定设备会话。':
+    'The access token comes from Element settings → Help → Advanced settings, or from the homeserver login API; the user id and password flow derives a stable device session for this installation.',
+  '填写 homeserver 地址与访问令牌，或者用户 ID 与密码，即可让机器人以 CS API 长轮询接收消息并以富文本回复。':
+    'Enter the homeserver URL with an access token, or a user id with a password, and the bot receives messages over the CS API long poll and replies with rich text.',
+  '使用 homeserver 与凭据接入 Matrix 机器人': 'Connect a Matrix bot with the homeserver and credentials',
+  '访问令牌或用户 ID 与密码': 'access token or user id with password',
   '接入 Telegram 机器人': 'Connect a Telegram bot',
   '先通过 @BotFather 获取 Bot Token，再在这里完成接入。': 'Get a Bot Token from @BotFather, then connect it here.',
   '填写 @BotFather 生成的 Bot Token': 'Enter the Bot Token from @BotFather',

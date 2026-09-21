@@ -17,7 +17,7 @@ const channels = await Promise.all([
   ['wecom', 'WecomConfigStore'], ['wecom-app', 'WecomAppConfigStore'],
   ['qq', 'QqConfigStore'], ['slack', 'SlackConfigStore'],
   ['telegram', 'TelegramConfigStore'], ['discord', 'DiscordConfigStore'],
-  ['whatsapp', 'WhatsappConfigStore'], ['office', 'OfficeConfigStore'],
+  ['whatsapp', 'WhatsappConfigStore'], ['matrix', 'MatrixConfigStore', 'matrix-config-store'], ['office', 'OfficeConfigStore'],
 ].map(async ([id, storeName, storeFile = 'config-store']) => ({
   id,
   key: id === 'wecom-app' ? 'wecomApp' : id,

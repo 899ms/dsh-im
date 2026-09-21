@@ -147,7 +147,7 @@ try {
     headers: { cookie: lan.cookie },
   }), 200);
   for (const channel of ['feishu', 'weixin', 'dingtalk', 'wecom', 'wecom-app', 'qq',
-    'slack', 'telegram', 'discord', 'whatsapp', 'imessage', 'office']) {
+    'slack', 'telegram', 'discord', 'whatsapp', 'imessage', 'matrix', 'office']) {
     expectStatus(`LAN default: ${channel}`, await rpc(lan, channel), 200, true);
   }
   const delivery = await rpc(lan, 'dsh-im-delivery', 'target.list', {}, { botId: 'bot_missing' });

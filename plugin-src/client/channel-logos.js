@@ -155,6 +155,17 @@ export function IMessageLogoGlyph({ size } = {}) {
   }));
 }
 
+export function MatrixLogoGlyph({ size } = {}) {
+  return h('svg', {
+    ...dimensions(size), viewBox: '0 0 24 24', focusable: 'false',
+    'aria-hidden': 'true', 'data-im-channel-logo': 'matrix',
+  }, h('path', {
+    fill: 'currentColor',
+    'fill-rule': 'evenodd',
+    d: 'M4 4h16a2.4 2.4 0 0 1 2.4 2.4v8.2A2.4 2.4 0 0 1 20 17h-7.55l-4.2 3.3a.6.6 0 0 1-.98-.47V17H4A2.4 2.4 0 0 1 1.6 14.6V6.4A2.4 2.4 0 0 1 4 4Zm3 4.1a1.45 1.45 0 1 0 0 2.9 1.45 1.45 0 0 0 0-2.9Zm5.6 0a1.45 1.45 0 1 0 0 2.9 1.45 1.45 0 0 0 0-2.9Zm5.6 0a1.45 1.45 0 1 0 0 2.9 1.45 1.45 0 0 0 0-2.9Z',
+  }));
+}
+
 export function OfficeLogoGlyph({ size } = {}) {
   return h('svg', {
     ...dimensions(size),

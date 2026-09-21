@@ -68,6 +68,7 @@ Connect IM bots to DeepSeek Harness by scanning a QR code, using an App Manifest
 | Discord | 使用 Developer Portal 生成的 Bot Token | Gateway v10 长连接；私信直接回复；服务器文字/公告频道首次 @ 后创建原生 Thread，后续在线程中无需重复 @，并通过编辑消息流式显示回答 |
 | WhatsApp | 使用手机 WhatsApp 扫码关联设备 | WhatsApp Web 长连接；默认仅响应账号自聊，也可切换到指定联系人或开放响应模式；显示已读和“正在输入”，通过每秒编辑同一条消息显示工具进度和逐步生成的回答，长回复自动分段，编辑失败时回退为完整文字回复 |
 | iMessage | 在 macOS Messages.app 中登录 iMessage，并按[渠道说明](docs/imessage.md)授予本机权限 | 使用 macOS 原生 Messages.app 收发文本私聊；不依赖 BlueBubbles；每个 macOS 用户账户使用一个本机 iMessage 身份 |
+| Matrix | 填写 homeserver 地址，并提供访问令牌，或用户 ID 与密码 | CS API 长轮询接收；私聊直接回复，房间被 @ 后响应，支持线程回复、HTML 白名单富文本与编辑式流式输出，可回传图片和结果文件；端到端加密房间当前按可见提示降级跳过 |
 
 企业微信自建应用的回调基址、代理地址和企业可信 IP 配置，见[企业微信自建应用接入说明](docs/企业微信自建应用接入.md)。
 
@@ -100,6 +101,7 @@ Connect IM bots to DeepSeek Harness by scanning a QR code, using an App Manifest
 | Telegram | 机器人必须能在当前聊天发送文档，实际可发送范围以 Bot API 返回为准。 |
 | Discord | Developer Portal 的 Bot 设置中需启用 **Message Content Intent**；机器人需有 **Send Messages**、**Create Public Threads**、**Send Messages in Threads** 和 **Read Message History** 权限；发送结果文件还需 **Attach Files**。实际附件额度由当前账号与服务器能力决定。 |
 | WhatsApp | 当前绑定会话需支持 Document Message，实际可发送范围以 WhatsApp/Baileys 返回为准。 |
+| Matrix | homeserver 需允许媒体上传，单文件实际上限由其媒体仓库配置决定；被拒绝时插件会明确提示检查媒体大小限制与上传权限。 |
 
 ## AI Office Connector
 
@@ -238,9 +240,9 @@ Logo 由 dsh-im 的浏览器适配显示，无需修改 DSH。适配保留原始
 - Harness 一级设置菜单中只注册一个「IM机器人」设置页，其中包含内置 IM 渠道和一个 AI Office Connector；
 - 内置渠道及 Office Connector 的 Host、客户端与运行时源码都在本仓库维护，不依赖外部独立插件；
 - 设置页跟随 DeepSeek Harness 的语言选择，在中文和 English 之间即时切换；机器人发出的聊天消息、命令帮助和 Telegram 命令菜单同样跟随该界面语言并即时切换，中文始终为兜底，未收录的文案原样输出；
-- 左侧使用 Logo 切换微信、飞书、钉钉、企业微信、企业微信应用、QQ、Slack、Telegram、Discord、WhatsApp、iMessage 和 AI Office，不使用启用/停用开关；
+- 左侧使用 Logo 切换微信、飞书、钉钉、企业微信、企业微信应用、QQ、Slack、Telegram、Discord、WhatsApp、iMessage、Matrix 和 AI Office，不使用启用/停用开关；
 - 各 IM 渠道保持独立的 RPC、凭据、连接监督和会话映射；Office Connector 另行维护设备凭据、Job 租约、审批等待与并发上限；
-- 浏览器只获得二维码、Manifest、脱敏状态，以及用户为当前 Telegram 或 WhatsApp 机器人主动保存的访问模式和白名单标识；手动输入的 Secret 或 Token 仅单向提交给本机 Host，任何 RPC 响应都不会返回 App Secret、`bot_token`、钉钉 `client_secret`、企业微信 Secret、QQ `app_secret`、Slack Bot/App Token、Telegram/Discord Bot Token、WhatsApp 关联设备密钥、AI Office Device Token，或从平台消息中观察到的其他原始用户标识。
+- 浏览器只获得二维码、Manifest、脱敏状态，以及用户为当前 Telegram 或 WhatsApp 机器人主动保存的访问模式和白名单标识；手动输入的 Secret 或 Token 仅单向提交给本机 Host，任何 RPC 响应都不会返回 App Secret、`bot_token`、钉钉 `client_secret`、企业微信 Secret、QQ `app_secret`、Slack Bot/App Token、Telegram/Discord Bot Token、WhatsApp 关联设备密钥、Matrix 访问令牌与密码、AI Office Device Token，或从平台消息中观察到的其他原始用户标识。
 
 ## 本地开发
 
