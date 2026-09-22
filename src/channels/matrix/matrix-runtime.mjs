@@ -119,6 +119,16 @@ function inviteSenderOf(inviteRoom) {
   return null;
 }
 
+// A room is a direct chat only when the homeserver itself says so: the invite's own membership event
+// carries is_direct, or the account's m.direct listing names the room. A two-member room is an
+// ordinary room, where the mention gate must keep applying, so the joined-member count is never a signal.
+function inviteMarksDirect(inviteRoom) {
+  const events = Array.isArray(inviteRoom?.invite_state?.events) ? inviteRoom.invite_state.events : [];
+  return events.some((event) => event?.type === 'm.room.member'
+    && event?.content?.membership === 'invite'
+    && event?.content?.is_direct === true);
+}
+
 function timelineEventsOf(joinRoom) {
   const events = Array.isArray(joinRoom?.timeline?.events) ? joinRoom.timeline.events : [];
   return events.filter((event) => event && typeof event === 'object' && event.state_key === undefined);
@@ -467,12 +477,13 @@ export class MatrixRuntime {
       if (!Array.isArray(list)) continue;
       for (const roomId of list) if (isMatrixRoomId(roomId)) this.#dmRooms.add(roomId);
     }
-    for (const roomId of this.#sidecar.dmRooms()) this.#dmRooms.add(roomId);
+    // A persisted direct chat survives only where the bot really routes a person to it, or where the
+    // account data above re-registers it: residue from the retired member-count rule is forgotten here.
+    const routedTo = new Set(Object.values(this.#sidecar.dmRoomByUser()).filter((roomId) => isMatrixRoomId(roomId)));
+    for (const roomId of this.#sidecar.dmRooms()) if (routedTo.has(roomId)) this.#dmRooms.add(roomId);
     for (const roomId of this.#sidecar.joinedRooms()) this.#joinedRooms.add(roomId);
-    await this.#classifyUnknownRooms();
-    for (const roomId of Object.keys(rooms.invite ?? {})) {
-      const inviter = inviteSenderOf(rooms.invite?.[roomId]);
-      this.#scheduleInviteJoin(roomId, inviter);
+    for (const [roomId, room] of Object.entries(rooms.invite ?? {})) {
+      this.#scheduleInviteJoin(roomId, inviteSenderOf(room), inviteMarksDirect(room));
     }
     // Queued to-device room keys land before the offline timeline replay so queued ciphertext can decrypt on first sight.
     await this.#dispatchToDeviceEvents(initial?.to_device?.events);
@@ -489,14 +500,6 @@ export class MatrixRuntime {
     }
     this.#status.joinedRooms = this.#joinedRooms.size;
     this.#status.encryptedRoomsSeen = this.#encryptedRooms.size;
-  }
-
-  async #classifyUnknownRooms() {
-    for (const roomId of this.#joinedRooms) {
-      if (this.#dmRooms.has(roomId)) continue;
-      const count = await this.#api.getJoinedMemberCount(roomId).catch(() => null);
-      if (count !== null && count <= 2) this.#dmRooms.add(roomId);
-    }
   }
 
   async #syncLoop(generation) {
@@ -567,7 +570,7 @@ export class MatrixRuntime {
     }
     for (const [roomId, room] of Object.entries(rooms.invite ?? {})) {
       if (!isMatrixRoomId(roomId)) continue;
-      this.#scheduleInviteJoin(roomId, inviteSenderOf(room));
+      this.#scheduleInviteJoin(roomId, inviteSenderOf(room), inviteMarksDirect(room));
     }
     if (typeof data?.next_batch === 'string' && data.next_batch) {
       this.#lastBatch = data.next_batch;
@@ -711,7 +714,7 @@ export class MatrixRuntime {
 
   // ---- 邀请 join ----
 
-  #scheduleInviteJoin(roomId, inviter) {
+  #scheduleInviteJoin(roomId, inviter, marksDirect = false) {
     if (this.#stopped || !isMatrixRoomId(roomId) || this.#joinedRooms.has(roomId)) return;
     if (this.#sidecar.isDeclined(roomId)) return;
     const allowed = this.#config.autoJoinInvites === 'all' || inviterAllowed(this.#accessPolicy, inviter);
@@ -725,12 +728,12 @@ export class MatrixRuntime {
     if (this.#inviteTasks.has(roomId)) return;
     const controller = new AbortController();
     this.#inviteTasks.set(roomId, controller);
-    void this.#joinInvitedRoom(roomId, inviter, controller).finally(() => {
+    void this.#joinInvitedRoom(roomId, inviter, controller, marksDirect).finally(() => {
       this.#inviteTasks.delete(roomId);
     });
   }
 
-  async #joinInvitedRoom(roomId, inviter, controller) {
+  async #joinInvitedRoom(roomId, inviter, controller, marksDirect = false) {
     const timeout = AbortSignal.timeout(INVITE_JOIN_TIMEOUT_MS);
     const signal = AbortSignal.any([controller.signal, timeout]);
     try {
@@ -738,7 +741,7 @@ export class MatrixRuntime {
       this.#joinedRooms.add(roomId);
       this.#status.joinedRooms = this.#joinedRooms.size;
       await this.#sidecar.apply({ joinedRooms: [...this.#joinedRooms] });
-      if (inviter) await this.#recordDmRoom(roomId, inviter);
+      if (inviter) await this.#recordDmRoom(roomId, inviter, marksDirect);
       this.#logger.info?.(t('Matrix 已按授权邀请加入房间 {room}。'), { room: roomId });
     } catch (error) {
       const text = String(error?.message ?? '').toLowerCase();
@@ -756,14 +759,16 @@ export class MatrixRuntime {
     }
   }
 
-  async #recordDmRoom(roomId, inviter) {
+  // The inviter's cached room stays usable for outbound routing either way; only an authoritative
+// is_direct invite registers the room as a direct chat for inbound handling.
+  async #recordDmRoom(roomId, inviter, marksDirect = false) {
     const direct = await this.#api.getAccountData('m.direct').catch(() => null);
     const map = { ...(direct && typeof direct === 'object' && !Array.isArray(direct) ? direct : {}) };
     const list = Array.isArray(map[inviter]) ? [...map[inviter]] : [];
     if (!list.includes(roomId)) list.push(roomId);
     map[inviter] = list;
     await this.#api.setAccountData('m.direct', map).catch(() => undefined);
-    this.#dmRooms.add(roomId);
+    if (marksDirect) this.#dmRooms.add(roomId);
     const dmRoomByUser = { ...this.#sidecar.dmRoomByUser(), [inviter.trim().toLowerCase()]: roomId };
     await this.#sidecar.apply({ dmRooms: [...this.#dmRooms], dmRoomByUser });
   }

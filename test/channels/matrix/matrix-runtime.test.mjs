@@ -208,6 +208,85 @@ const sentReactions = (fake) => fake.calls.filter((call) => call.op === 'send' &
 const deliveredAnswers = (fake, answer) => sentMessages(fake).some((call) =>
   call.content['m.new_content']?.body === answer || call.content.body === answer);
 
+test('a two-member room stays an ordinary room: unaddressed chatter is ignored and only a mention answers', async () => {
+  const plain = messageEvent({ sender: '@carol:example.org', body: '二人小群的闲聊' });
+  const mentioned = messageEvent({
+    sender: '@carol:example.org',
+    body: '帮帮我 <@BOT:Example.org>',
+    content: { 'm.mentions': { user_ids: ['@Bot:Example.org'] } },
+  });
+  const context = await createContext({
+    apiOptions: {
+      memberCounts: { '!group:example.org': 2 },
+      initial: {
+        next_batch: 'b0',
+        rooms: { join: { '!group:example.org': { timeline: { events: [plain, mentioned] } } } },
+      },
+    },
+  });
+  try {
+    await context.runtime.start();
+    await eventually(() => deliveredAnswers(context.fake, '好的'));
+    deepStrictEqual(context.runtime.status.messagesReceived, 1,
+      'the joined member count alone must not classify the room as a direct chat');
+    deepStrictEqual(context.sidecar.dmRooms().includes('!group:example.org'), false);
+    ok(sentMessages(context.fake).every((call) => call.roomId === '!group:example.org'));
+  } finally {
+    await context.stop();
+  }
+});
+
+test('a room the retired member-count rule had recorded as a direct chat is forgotten on load', async () => {
+  const plain = messageEvent({ sender: '@carol:example.org', body: '群里随口一句' });
+  const context = await createContext({
+    apiOptions: {
+      initial: {
+        next_batch: 'b0',
+        rooms: { join: { '!group:example.org': { timeline: { events: [plain] } } } },
+      },
+    },
+  });
+  try {
+    await context.sidecar.apply({ dmRooms: ['!group:example.org'], joinedRooms: ['!group:example.org'] });
+    await context.runtime.start();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    deepStrictEqual(context.runtime.status.messagesReceived, 0,
+      'the stale direct-chat record alone must not let unaddressed room chatter through the gate');
+    deepStrictEqual(context.sidecar.dmRooms().includes('!group:example.org'), false,
+      'the stale direct-chat record is dropped once the runtime persists its classification again');
+  } finally {
+    await context.stop();
+  }
+});
+
+test('an invite whose membership event carries is_direct registers a direct room', async () => {
+  const context = await createContext({
+    apiOptions: {
+      initial: {
+        next_batch: 'b0',
+        rooms: {
+          invite: {
+            '!dm-invite:example.org': {
+              invite_state: { events: [{
+                type: 'm.room.member',
+                sender: '@owner:example.org',
+                state_key: '@bot:example.org',
+                content: { membership: 'invite', is_direct: true },
+              }] },
+            },
+          },
+        },
+      },
+    },
+  });
+  try {
+    await context.runtime.start();
+    await eventually(() => context.sidecar.dmRooms().includes('!dm-invite:example.org'),
+      'the authoritative is_direct invite registers the room as a direct chat');
+  } finally {
+    await context.stop();
+  }
+});
 test('the DM round trip reaches the harness and streams the answer with typing, preview and reaction', async () => {
   const event = messageEvent();
   const context = await createContext({
@@ -354,9 +433,14 @@ test('the dedupe ring swallows replayed events inside one runtime lifetime', asy
 });
 
 test('invites honor the access policy, decline dead rooms permanently and respect the all mode', async () => {
-  const inviteState = (sender) => ({
+  const inviteState = (sender, { isDirect = false } = {}) => ({
     '!inv:example.org': {
-      invite_state: { events: [{ type: 'm.room.member', sender, content: { membership: 'invite' }, state_key: '@victim:example.org' }] },
+      invite_state: { events: [{
+        type: 'm.room.member',
+        sender,
+        content: { membership: 'invite', ...(isDirect ? { is_direct: true } : {}) },
+        state_key: '@victim:example.org',
+      }] },
     },
   });
   const allowlisted = {
@@ -388,8 +472,9 @@ test('invites honor the access policy, decline dead rooms permanently and respec
     await eventually(() => joined.fake.calls.some((call) => call.op === 'join' && call.roomId === '!inv:example.org'));
     await eventually(() => joined.sidecar.dmRoomByUser()['@owner:example.org'] === '!inv:example.org');
     deepStrictEqual(joined.sidecar.dmRoomByUser()['@owner:example.org'], '!inv:example.org',
-      'the inviter gains a cached dm room so replies route there');
-    deepStrictEqual(joined.sidecar.dmRooms().includes('!inv:example.org'), true);
+      'the inviter gains a cached room so outbound replies route there');
+    deepStrictEqual(joined.sidecar.dmRooms().includes('!inv:example.org'), false,
+      'an invite without an authoritative direct flag stays an ordinary room, so the mention gate keeps applying');
   } finally {
     await joined.stop();
   }
