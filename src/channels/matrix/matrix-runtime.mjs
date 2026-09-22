@@ -18,10 +18,16 @@ import {
   ClockSkewGuard,
   compileIgnorePatterns,
   EventDedupeRing,
+  isMatrixCommandLike,
   normalizeMatrixDeliveryTarget,
   normalizeMatrixTimelineEvent,
   resolveBangMatrixCommand,
 } from './matrix-normalize.mjs';
+import {
+  DEFAULT_ROOM_HISTORY_LIMIT,
+  formatRoomContextBlock,
+  roomContextDayStartTs,
+} from './matrix-room-history.mjs';
 import {
   applyMatrixRelations,
   buildMatrixEditContent,
@@ -38,6 +44,13 @@ const INVITE_JOIN_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_MESSAGE_LENGTH = 16_000;
 const DEFAULT_MAX_MEDIA_BYTES = 104_857_600;
 const EDIT_STREAM_INTERVAL_MS = 350;
+
+function safeInt(value, min, max, fallback) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const rounded = Math.trunc(value);
+  if (!Number.isSafeInteger(rounded)) return fallback;
+  return Math.min(Math.max(rounded, min), max);
+}
 const DEAD_ROOM_MARKERS = Object.freeze(['no servers', 'room not found']);
 const IMAGE_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
@@ -186,6 +199,7 @@ export class MatrixRuntime {
     createApi = (options) => new MatrixApi(options),
     cryptoStore = null,
     createCrypto = null,
+    roomHistory = null,
     isKnownCommand,
   } = {}) {
     const homeserver = validateMatrixHomeserver(config.homeserver);
@@ -233,6 +247,17 @@ export class MatrixRuntime {
       ? createCrypto
       : (options) => new MatrixCryptoEngine(options);
     this.#isKnownCommand = typeof isKnownCommand === 'function' ? isKnownCommand : () => false;
+    this.#roomHistory = roomHistory
+      && typeof roomHistory.append === 'function'
+      && typeof roomHistory.consumePending === 'function'
+      && typeof roomHistory.pending === 'function'
+      && typeof roomHistory.search === 'function'
+      ? roomHistory
+      : null;
+    this.#roomContextLimit = safeInt(config.roomContextLimit, 1, 500, 50);
+    this.#roomContextMaxChars = safeInt(config.roomContextMaxChars, 200, 200_000, 8_000);
+    this.#roomContextTzOffsetMinutes = safeInt(config.roomContextTzOffsetMinutes, -840, 840, 0);
+    this.#roomContextEnabled = config.roomContextEnabled !== false;
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#patterns = compileIgnorePatterns(config.ignoreUserPatterns);
     for (const roomId of toRoomSet(config.freeResponseRooms)) this.#freeRooms.add(roomId);
@@ -241,6 +266,11 @@ export class MatrixRuntime {
 
   #freeRooms = new Set();
   #allowedRooms = new Set();
+  #roomHistory = null;
+  #roomContextLimit = 50;
+  #roomContextMaxChars = 8_000;
+  #roomContextTzOffsetMinutes = 0;
+  #roomContextEnabled = true;
 
   get status() {
     return this.#status;
@@ -588,6 +618,7 @@ export class MatrixRuntime {
         this.#status.lastClockSkewAt = new Date().toISOString();
         this.#logger.warn?.(t('Matrix 收到的时间戳持续远落后于本机时间，检测到本机时钟超前，请校准系统时间后重启机器人。'));
       }
+      if (outcome.drop === 'mention-required') this.#recordRoomAmbient(roomId, event);
       return;
     }
     const message = { ...outcome.message };
@@ -598,12 +629,73 @@ export class MatrixRuntime {
         message.addressed = true;
       }
     }
+    if (this.#roomHistory && this.#roomContextEnabled && message.kind === 'group') {
+      if (message.addressed) {
+        const commandLike = isMatrixCommandLike(message.content);
+        const directAddress = message.mentioned === true || Boolean(message.replyToEventId);
+        this.#recordRoomHuman(message, { kind: commandLike ? 'command' : 'human', injected: true });
+        if (!commandLike && directAddress) {
+          const block = this.#consumeRoomContext(message.roomId);
+          if (block) message.content = `${block}\n\n${message.content}`;
+        }
+      } else {
+        this.#recordRoomHuman(message, { kind: 'human', injected: false });
+      }
+    }
     void Promise.resolve(this.#bridge?.accept(message)).catch((error) => {
       this.#logger.warn?.('[dsh-im:matrix] inbound message handling failed:', error?.message ?? error);
     });
     if (message.addressed) {
       void this.#api?.setTyping(message.roomId, { typing: true, timeoutMs: 20_000 }).catch(() => undefined);
     }
+  }
+
+  #recordRoomAmbient(roomId, event) {
+    if (!this.#roomHistory || !this.#roomContextEnabled) return;
+    if (this.#dmRooms.has(roomId)) return;
+    const eventId = typeof event?.event_id === 'string' ? event.event_id : '';
+    const sender = typeof event?.sender === 'string' ? event.sender : '';
+    const body = typeof event?.content?.body === 'string' ? event.content.body.trim() : '';
+    if (!eventId || !sender || !body) return;
+    this.#roomHistory.append({
+      roomId,
+      eventId,
+      sender,
+      text: body,
+      ts: Number.isSafeInteger(event?.origin_server_ts) ? event.origin_server_ts : Date.now(),
+      kind: 'human',
+      injected: false,
+    });
+  }
+
+  #recordRoomHuman(message, { kind = 'human', injected = false } = {}) {
+    if (!this.#roomHistory || !this.#roomContextEnabled) return;
+    const text = typeof message.content === 'string' ? message.content.trim() : '';
+    if (!text || !message.messageId || !message.senderId) return;
+    this.#roomHistory.append({
+      roomId: message.roomId,
+      eventId: message.messageId,
+      sender: message.senderId,
+      text,
+      ts: Date.now(),
+      kind,
+      injected,
+    });
+  }
+
+  #consumeRoomContext(roomId) {
+    if (!this.#roomHistory) return '';
+    const now = Date.now();
+    const selected = this.#roomHistory.consumePending({
+      roomId,
+      sinceTs: roomContextDayStartTs(now, this.#roomContextTzOffsetMinutes),
+      limit: this.#roomContextLimit,
+      maxChars: this.#roomContextMaxChars,
+      now,
+    });
+    if (selected.length === 0) return '';
+    const header = t('群内其他成员自你上次回复以来的发言（未直接提及机器人，仅供参考）：');
+    return formatRoomContextBlock(selected, { header });
   }
 
   #noteEncryptedRoom(roomId) {

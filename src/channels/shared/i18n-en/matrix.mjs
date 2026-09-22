@@ -11,6 +11,8 @@ export default {
     'Matrix long polling and Harness replies are all working.',
   'Matrix 连接当前离线。':
     'The Matrix connection is currently offline.',
+  '群内其他成员自你上次回复以来的发言（未直接提及机器人，仅供参考）：':
+    'Room messages from other members since your last reply (not addressed to the bot; for context only):',
   'Matrix 长轮询尚未建立，请检查 homeserver 与凭据。':
     'The Matrix long poll has not been established. Check the homeserver URL and the credentials.',
   'Matrix 正在处理消息；当前存在未恢复的连接。':

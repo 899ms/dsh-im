@@ -7,6 +7,7 @@ import { deepStrictEqual, equal, match, ok, rejects } from 'node:assert';
 import { MatrixRuntime } from '../../../src/channels/matrix/matrix-runtime.mjs';
 import { MatrixSidecarStore } from '../../../src/channels/matrix/matrix-config-store.mjs';
 import { MatrixApiError } from '../../../src/channels/matrix/matrix-api.mjs';
+import { MatrixRoomHistoryStore } from '../../../src/channels/matrix/matrix-room-history.mjs';
 
 const HOME = 'https://matrix.example.org';
 const BOT = '@bot:example.org';
@@ -184,6 +185,7 @@ async function createContext(options = {}) {
     harness,
     state,
     sidecar,
+    roomHistory: options.roomHistory ?? null,
     accessPolicy,
     logger,
     createApi: () => fake,
@@ -786,6 +788,50 @@ test('a live crypto engine decrypts inbound megolm traffic, seals outbound sends
 
     await context.stop();
     ok(engine.stopped, 'stopping the runtime stops the crypto engine');
+  } finally {
+    await context.stop();
+  }
+});
+
+test('a mentioned group reply is conditioned on unaddressed same-day room chatter', async () => {
+  const ambient = messageEvent({ sender: '@carol:example.org', body: '今天的构建报错了' });
+  const mention = messageEvent({
+    sender: '@alice:example.org',
+    body: '@bot:example.org 帮我看看怎么办',
+    content: { 'm.mentions': { user_ids: [BOT] } },
+  });
+  const directory = await makeTempDirectory('dsh-im-matrix-history-');
+  const history = await new MatrixRoomHistoryStore(join(directory, 'matrix-history.json')).load();
+  const context = await createContext({
+    roomHistory: history,
+    apiOptions: {
+      initial: {
+        next_batch: 's1',
+        rooms: { join: { '!group:example.org': { timeline: { events: [ambient, mention] } } } } },
+    },
+  });
+  try {
+    await context.runtime.start();
+    await eventually(() => context.harness.prompts.some((prompt) => prompt.includes('帮我看看怎么办')),
+      'the mention reaches the harness');
+    deepStrictEqual(context.harness.prompts.length, 1,
+      'the unaddressed chatter alone never triggers a harness turn');
+    const prompt = context.harness.prompts[0];
+    ok(prompt.includes('今天的构建报错了'), 'the unaddressed same-day chatter is injected as context');
+    ok(prompt.includes('carol'), 'the injected context attributes the earlier speaker');
+    ok(prompt.indexOf('今天的构建报错了') < prompt.indexOf('帮我看看怎么办'),
+      'the injected context precedes the addressed turn');
+    const retained = history.search({ roomId: '!group:example.org', query: '构建' });
+    ok(retained.some((entry) => entry.kind === 'human' && entry.text === '今天的构建报错了'),
+      'the room record retains the shared unaddressed message for later search');
+    const mentionedRecord = history.search({ roomId: '!group:example.org', query: '帮我看看怎么办' });
+    ok(mentionedRecord.length === 1 && mentionedRecord[0].injected === true,
+      'the addressed turn is retained as already consumed, without the injected block leaking into it');
+    deepStrictEqual(history.pending({ roomId: '!group:example.org' }), [],
+      'injected chatter is consumed and is not re-sent on a later turn');
+    ok(sentMessages(context.fake).some((call) => call.roomId === '!group:example.org'
+      && (call.content.body === '好的' || call.content['m.new_content']?.body === '好的')),
+      'the reply is delivered back to the room that triggered it');
   } finally {
     await context.stop();
   }
