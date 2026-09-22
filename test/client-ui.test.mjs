@@ -226,7 +226,8 @@ test('IM settings renders twelve IM channels plus the AI Office connector', asyn
   assert.match(markup, /target="_blank"/);
   assert.match(markup, /rel="noopener noreferrer"/);
   assert.match(markup, /aria-label="dsh-im GitHub"/);
-  assert.match(markup, /dim-updateTrigger[^>]*aria-haspopup="dialog"[^>]*>检查更新</);
+  assert.match(markup, /dim-updateTrigger[^>]*aria-label="检查更新"[^>]*aria-haspopup="dialog"[^>]*><svg/);
+  assert.match(markup, /class="dim-updateTooltip" role="tooltip">检查更新<\/span>/);
   assert.ok(markup.indexOf('dim-updateTrigger') < markup.indexOf('dim-githubAction'));
   assert.ok(markup.indexOf('dim-githubAction') < markup.indexOf('dim-generalSettingsAction'));
   assert.match(markup, /aria-describedby="[^"]+"/);

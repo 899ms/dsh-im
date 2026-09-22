@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import validSemver from 'semver/functions/valid.js';
 import compareVersionsDescending from 'semver/functions/rcompare.js';
 
-import { h } from './i18n.js';
+import { h, localizeText } from './i18n.js';
 import { createPollScheduler } from './lifecycle.js';
 
 export const UPDATE_RPC_CHANNEL = '/dsh-im';
@@ -240,6 +240,7 @@ function UpdateDialog({ children, onClose }) {
 }
 
 export function UpdatePanel({ rpcCall, clientVersion, onStatus }) {
+  const tooltipId = React.useId();
   const [snapshot, setSnapshot] = React.useState(null);
   const [action, setAction] = React.useState('status');
   const [error, setError] = React.useState(null);
@@ -409,19 +410,32 @@ export function UpdatePanel({ rpcCall, clientVersion, onStatus }) {
       : restartRequired ? '待手动重启'
         : snapshot?.canInstall ? '更新至'
           : '检查更新';
+  const buttonDescription = localizeText(buttonLabel) + (buttonLabel === '更新至' ? ` v${snapshot.latestVersion}` : '');
 
   return h(React.Fragment, null,
-    h('button', {
-      type: 'button',
-      className: 'dim-updateButton dim-updateTrigger',
-      disabled: busyAction,
-      'aria-haspopup': 'dialog',
-      onClick: () => {
-        setOpen(true);
-        if (restartRequired) void refreshStatus();
-        else if (!snapshot?.canInstall && !activeJob && !uncertainInstall) void check();
+    h('span', { className: 'dim-updateAction' },
+      h('button', {
+        type: 'button',
+        className: 'dim-updateButton dim-updateTrigger',
+        disabled: busyAction,
+        'aria-label': buttonDescription,
+        'aria-describedby': tooltipId,
+        'aria-haspopup': 'dialog',
+        onClick: () => {
+          setOpen(true);
+          if (restartRequired) void refreshStatus();
+          else if (!snapshot?.canInstall && !activeJob && !uncertainInstall) void check();
+        },
+      }, h('svg', {
+        width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none',
+        stroke: 'currentColor', strokeWidth: 2.3, strokeLinecap: 'round', strokeLinejoin: 'round',
+        focusable: 'false', 'aria-hidden': 'true',
       },
-    }, buttonLabel, buttonLabel === '更新至' ? ` v${snapshot.latestVersion}` : null),
+      h('path', { d: 'M3 12a9 9 0 0 1 15.36-6.36L21 8' }),
+      h('path', { d: 'M21 3v5h-5' }),
+      h('path', { d: 'M21 12a9 9 0 0 1-15.36 6.36L3 16' }),
+      h('path', { d: 'M8 16H3v5' }))),
+      h('span', { id: tooltipId, className: 'dim-updateTooltip', role: 'tooltip' }, buttonDescription)),
     open ? h(UpdateDialog, { onClose: () => setOpen(false) },
       h('div', { className: 'dim-updateBody' },
         h('dl', { className: 'dim-updateVersions' },

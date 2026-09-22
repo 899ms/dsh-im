@@ -6,6 +6,27 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.25.0] - 2026-09-22
+
+### Added / 新增
+
+- 新增 Matrix 实验性渠道，可使用 homeserver 与访问令牌，或用户 ID 与密码接入；支持私聊、群聊提及、线程回复、HTML 白名单富文本、编辑式流式输出、输入状态及图片和结果文件回传。纳入现有机器人设置、工作区与会话绑定、访问策略和主动投递体系。感谢 [@Dong09](https://github.com/Dong09)（[#245](https://github.com/xmanrui/dsh-im/pull/245)）。
+  Added an experimental Matrix channel using a homeserver with an access token or a user ID/password. It supports DMs, room mentions, thread replies, allowlisted HTML, edit-based streaming, typing indicators, and image/result-file delivery, integrated with bot settings, workspaces, Session bindings, access policies, and proactive delivery. Thanks to [@Dong09](https://github.com/Dong09) ([#245](https://github.com/xmanrui/dsh-im/pull/245)).
+- Matrix 加入本机加密状态存储、设备密钥注册、Megolm 房间消息加解密及设备间密钥共享的实验性实现，依赖固定版本 `@matrix-org/olm@3.2.15`。配置支持 `off`、默认 `optional` 和 `required`；引擎启动失败时，optional 模式跳过收到的加密消息，required 模式拒绝启动连接。
+  Added experimental Matrix local crypto state, device-key registration, Megolm room-message encryption/decryption, and to-device key sharing using pinned `@matrix-org/olm@3.2.15`. Configuration supports `off`, default `optional`, and `required`: failed crypto startup skips incoming encrypted traffic in optional mode and prevents connection startup in required mode.
+
+### Changed / 变更
+
+- 「检查更新」改为图标按钮，通过悬停提示与无障碍标签展示检查中、可更新版本、安装中或待手动重启状态，保留原有更新对话框和确认流程。
+  Replaced the update-check text button with an icon whose tooltip and accessible label reflect checking, the available version, installation, or a required manual restart, preserving the update dialog and confirmation flow.
+- Matrix 导航明确标注「实验功能」，补充渠道标识、中英文文案、集成说明及自动化测试，并纠正 README 中「始终跳过加密房间」的旧描述。
+  Marked Matrix as experimental in navigation, added channel branding, Chinese/English copy, integration notes, and automated tests, and corrected the outdated README statement that encrypted rooms are always skipped.
+
+### Known limitations / 已知限制
+
+- Matrix 加密仍为实验性能力，本次发布验证不包含真实 homeserver／Element 互通测试；未实现交互式设备验证、密钥备份及 SSSS，媒体附件内容也未做附件级加密。请仅在非敏感测试场景试用，不要将其视为完整的端到端保密保障。
+  Matrix encryption remains experimental; release validation does not include live homeserver/Element interoperability testing. Interactive device verification, key backup, SSSS, and attachment-content encryption are not implemented. Use only for non-sensitive testing, not as a complete end-to-end confidentiality guarantee.
+
 ## [4.24.1] - 2026-09-22
 
 ### Fixed / 修复
@@ -1190,7 +1211,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.24.1...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.25.0...HEAD
+[4.25.0]: https://github.com/xmanrui/dsh-im/compare/v4.24.1...v4.25.0
 [4.24.1]: https://github.com/xmanrui/dsh-im/compare/v4.24.0...v4.24.1
 [4.24.0]: https://github.com/xmanrui/dsh-im/compare/v4.23.0...v4.24.0
 [4.23.0]: https://github.com/xmanrui/dsh-im/compare/v4.22.0...v4.23.0
