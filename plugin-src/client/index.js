@@ -111,7 +111,7 @@ const CHANNELS = Object.freeze([
   { id: 'wecomApp', label: '企业微信应用', note: '（实验功能）' },
   { id: 'imessage', label: 'iMessage', note: '（实验功能）' },
   { id: 'email', label: '邮箱', note: '（实验功能）' },
-  { id: 'matrix', label: 'Matrix' },
+  { id: 'matrix', label: 'Matrix', note: '（实验功能）' },
   { id: 'office', label: 'AI Office', note: '（实验功能）' },
 ]);
 
