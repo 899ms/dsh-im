@@ -639,7 +639,10 @@ export class MatrixRuntime {
         this.#recordRoomHuman(message, { kind: commandLike ? 'command' : 'human', injected: true });
         if (!commandLike && directAddress) {
           const block = this.#consumeRoomContext(message.roomId);
-          if (block) message.content = `${block}\n\n${message.content}`;
+          if (block) {
+            const label = t('【下面这条才是对你的提问，请只回答它】');
+            message.content = `${block}\n\n${label}\n${message.content}`;
+          }
         }
       } else {
         this.#recordRoomHuman(message, { kind: 'human', injected: false });
@@ -660,6 +663,8 @@ export class MatrixRuntime {
     const sender = typeof event?.sender === 'string' ? event.sender : '';
     const body = typeof event?.content?.body === 'string' ? event.content.body.trim() : '';
     if (!eventId || !sender || !body) return;
+    const self = this.#botUserId?.toLowerCase() ?? '';
+    if (self !== '' && sender.toLowerCase() === self) return;
     this.#roomHistory.append({
       roomId,
       eventId,
@@ -675,6 +680,8 @@ export class MatrixRuntime {
     if (!this.#roomHistory || !this.#roomContextEnabled) return;
     const text = typeof message.content === 'string' ? message.content.trim() : '';
     if (!text || !message.messageId || !message.senderId) return;
+    const self = this.#botUserId?.toLowerCase() ?? '';
+    if (self !== '' && message.senderId.toLowerCase() === self) return;
     this.#roomHistory.append({
       roomId: message.roomId,
       eventId: message.messageId,
@@ -697,8 +704,18 @@ export class MatrixRuntime {
       now,
     });
     if (selected.length === 0) return '';
-    const header = t('群内其他成员自你上次回复以来的发言（未直接提及机器人，仅供参考）：');
-    return formatRoomContextBlock(selected, { header });
+    // The room timeline echoes the bot's own messages too; showing them as other members' speech makes
+    // the model quote itself and answer its own earlier reply, so only third-party lines are presented.
+    const self = this.#botUserId?.toLowerCase() ?? '';
+    const others = selected.filter((entry) => self === '' || String(entry?.sender ?? '').toLowerCase() !== self);
+    if (others.length === 0) return '';
+    return formatRoomContextBlock(others, {
+      header: t('【群聊背景】以下各条是群里其他成员之间的发言，均未指向你。'),
+      instruction: t('这些内容只用来了解现场发生过什么。请勿逐条回应、复述、翻译或总结它们，也不要因为它们而改变下面那条提问的回答。'),
+      begin: t('—— 背景开始 ——'),
+      end: t('—— 背景结束（以上无需回应） ——'),
+      tzOffsetMinutes: this.#roomContextTzOffsetMinutes,
+    });
   }
 
   #noteEncryptedRoom(roomId) {

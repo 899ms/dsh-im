@@ -130,12 +130,18 @@ test('the record survives a reload, preserving entries and consumed markers', as
     'consumed markers persist so nothing is re-injected after a restart');
 });
 
-test('formatRoomContextBlock attributes speakers under a header', async () => {
+test('formatRoomContextBlock fences and stamps third-party background lines', async () => {
   const store = await newStore();
-  store.append(ev({ sender: '@alice:example.org', text: '第一句' }));
-  store.append(ev({ sender: '@bob:example.org', text: '第二句' }));
+  const morning = Date.UTC(2026, 0, 2, 9, 12, 0);
+  store.append(ev({ sender: '@alice:example.org', text: '第一句', ts: morning }));
+  store.append(ev({ sender: '@bob:example.org', text: '第二句', ts: morning + 60_000 }));
   const selected = store.pending({ roomId: '!room:example.org' });
-  const block = formatRoomContextBlock(selected, { header: 'HEADER' });
-  equal(block, 'HEADER\nalice: 第一句\nbob: 第二句', 'entries render chronologically attributed by display name');
+  const block = formatRoomContextBlock(selected, {
+    header: 'HEADER', instruction: 'RULE', begin: 'BEGIN', end: 'END', tzOffsetMinutes: 0,
+  });
+  equal(block, ['HEADER', 'RULE', 'BEGIN', '[09:12] [alice] 第一句', '[09:13] [bob] 第二句', 'END'].join('\n'),
+    'the label, the instruction and the fences wrap clock stamped bracketed speakers in chronological order');
   equal(formatRoomContextBlock([], { header: 'HEADER' }), '', 'no entries render an empty block');
+  const bare = formatRoomContextBlock(selected, {});
+  equal(bare.split('\n')[0], '[09:12] [alice] 第一句', 'without labels the run still reads as stamped transcript lines');
 });

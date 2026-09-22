@@ -286,9 +286,31 @@ export class MatrixRoomHistoryStore {
  * attributed by display name so the model can tell participants apart; the block
  * states it is room chatter the bot was not directly addressed in.
  */
-export function formatRoomContextBlock(entries, { header } = {}) {
+// Each line carries a clock stamp and a bracketed speaker, and the whole run sits between a labelled
+// opening and a closing fence: a bare list of speaker-colon-text lines reads to the model as questions
+// that are waiting to be answered one by one.
+function roomContextStamp(ts, offsetMinutes) {
+  const stamp = Number.isSafeInteger(ts) ? ts : 0;
+  const offset = Number.isSafeInteger(offsetMinutes) ? offsetMinutes : 0;
+  const shifted = new Date(stamp + offset * 60_000);
+  const hours = String(shifted.getUTCHours()).padStart(2, '0');
+  const minutes = String(shifted.getUTCMinutes()).padStart(2, '0');
+  return `[${hours}:${minutes}]`;
+}
+
+export function formatRoomContextBlock(entries, {
+  header = '', instruction = '', begin = '', end = '', tzOffsetMinutes = 0,
+} = {}) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
-  const lines = entries.map((entry) => `${entry.name || entry.sender || '?'}: ${entry.text}`);
-  const title = header ?? 'Matrix room context';
-  return `${title}\n${lines.join('\n')}`;
+  const lines = entries.map((entry) => {
+    const speaker = entry.name || entry.sender || '?';
+    return `${roomContextStamp(entry.ts, tzOffsetMinutes)} [${speaker}] ${entry.text}`;
+  });
+  const parts = [];
+  if (header) parts.push(header);
+  if (instruction) parts.push(instruction);
+  if (begin) parts.push(begin);
+  parts.push(...lines);
+  if (end) parts.push(end);
+  return parts.join('\n');
 }
