@@ -1010,19 +1010,74 @@ export function stepStatusText(status) {
 }
 
 /**
- * Split accumulated blocks into card-sized chunks at block boundaries,
- * budgeted by the encoded running-status card (the largest render). Every
- * chunk keeps at least one block so progress is never dropped. The caller
- * renders all but the last chunk as `sealed` and the last one live.
+ * A single card accepts only this many `table` elements. Feishu rejects the
+ * whole write with `230099 / ErrCode 11310 card table number over limit`, which
+ * leaves the card stuck on its previous content, so the reply never appears.
+ *
+ * The boundary was established by the maintainer against a live bot: five
+ * tables in one card succeeded, six failed, and a folded process panel's tables
+ * counted toward the total (3 folded + 2 in the body succeeded, 3 + 3 failed).
  */
-export function splitStepStreamCardBlocks(blocks, limit = STEP_STREAM_CARD_MAX_BYTES) {
+export const STEP_STREAM_CARD_MAX_TABLES = 5;
+
+/**
+ * Count the tables a markdown string renders as.
+ *
+ * Feishu turns a GFM table into a `table` element, so the count is of table
+ * *blocks*: a header row followed by a delimiter row of dashes and pipes. A
+ * line matching the delimiter is what distinguishes a table from ordinary
+ * prose that merely contains pipes, and each delimiter starts a new one.
+ */
+export function countMarkdownTables(text) {
+  if (typeof text !== 'string' || !text) return 0;
+  let count = 0;
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.includes('|')) continue;
+    // | --- | :---: | ---: | — every cell is dashes with optional colons.
+    // A single-column table (`| --- |`) is still a table.
+    if (/^\|?[\s:|-]*-[\s:|-]*\|?$/.test(trimmed) && /-/.test(trimmed)) {
+      const cells = trimmed.replace(/^\||\|$/g, '').split('|');
+      if (cells.length >= 1 && cells.every((cell) => /^\s*:?-+:?\s*$/.test(cell))) count += 1;
+    }
+  }
+  return count;
+}
+
+/** The tables a set of blocks renders as, across prose and folded panels. */
+function stepStreamCardTableCount(blocks) {
+  let count = 0;
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    if (typeof block?.text === 'string') count += countMarkdownTables(block.text);
+    // Folded panels render their lines too, and Feishu counts those tables.
+    if (Array.isArray(block?.lines)) {
+      for (const line of block.lines) count += countMarkdownTables(line);
+    }
+  }
+  return count;
+}
+
+/**
+ * Split accumulated blocks into card-sized chunks at block boundaries,
+ * budgeted by the encoded running-status card (the largest render) **and** by
+ * the table count, because a card accepts only a handful of tables no matter
+ * how small it is. Every chunk keeps at least one block so progress is never
+ * dropped. The caller renders all but the last chunk as `sealed` and the last
+ * one live.
+ */
+export function splitStepStreamCardBlocks(
+  blocks,
+  limit = STEP_STREAM_CARD_MAX_BYTES,
+  maxTables = STEP_STREAM_CARD_MAX_TABLES,
+) {
   const list = (Array.isArray(blocks) ? blocks : []).filter(Boolean);
   if (list.length === 0) return [];
   const chunks = [];
   let current = [];
   for (const block of list) {
-    if (current.length > 0
-      && Buffer.byteLength(stepStreamCard([...current, block]), 'utf8') > limit) {
+    const tooLarge = Buffer.byteLength(stepStreamCard([...current, block]), 'utf8') > limit;
+    const tooManyTables = stepStreamCardTableCount([...current, block]) > maxTables;
+    if (current.length > 0 && (tooLarge || tooManyTables)) {
       chunks.push(current);
       current = [block];
     } else {
