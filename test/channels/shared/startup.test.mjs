@@ -18,6 +18,7 @@ const channels = await Promise.all([
   ['qq', 'QqConfigStore'], ['slack', 'SlackConfigStore'],
   ['telegram', 'TelegramConfigStore'], ['discord', 'DiscordConfigStore'],
   ['whatsapp', 'WhatsappConfigStore'],
+  ['matrix', 'MatrixConfigStore', 'matrix-config-store'],
   ['email', 'EmailConfigStore'], ['office', 'OfficeConfigStore'],
 ].map(async ([id, storeName, storeFile = 'config-store']) => ({
   id,
