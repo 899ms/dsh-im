@@ -11781,3 +11781,66 @@ test('reference-only topic messages retain their content even after anchor injec
   assert.equal(f.asked.length, 2);
   assert.ok(hasAnchor(f.asked[1].text));
 });
+
+
+test('a p2p message with no body opens the menu instead of a text-only notice', async () => {
+  // An "@bot" with nothing after it arrives with an empty body once the mention
+  // is stripped. There is no instruction to parse, and the reader is plainly
+  // reaching for the panel — answering with "text only" reads as a refusal.
+  const created = [];
+  const replied = [];
+  const seen = new Set();
+  const bridge = new FeishuHarnessBridge({
+    client: {
+      im: { v1: { message: {
+        create: async (request) => {
+          created.push({
+            type: request.data.msg_type,
+            text: request.data.msg_type === 'text'
+              ? JSON.parse(request.data.content).text
+              : null,
+          });
+          return { code: 0, data: { message_id: `om_created_${created.length}` } };
+        },
+        reply: async (request) => {
+          replied.push({
+            to: request.path.message_id,
+            type: request.data.msg_type,
+            text: request.data.msg_type === 'text'
+              ? JSON.parse(request.data.content).text
+              : null,
+          });
+          return { code: 0, data: { message_id: `om_replied_${replied.length}` } };
+        },
+      } } },
+    },
+    harness: {
+      ensureRunning: async () => true,
+      bindWorkspaceSession: async (key, sessionId) => ({ sessionId, title: 'Test Session' }),
+    },
+    state: {
+      hasSeen: (id) => seen.has(id),
+      markSeen: async (id) => seen.add(id),
+      sessionFor: () => null,
+      setSession: async () => {},
+      clearSession: async () => {},
+    },
+    status: bridgeStatus(),
+    allowedSenderOpenIds: new Set(['ou_user']),
+  });
+
+  // p2p, empty body — what an "@bot" with no other text becomes.
+  await bridge.accept(event('om_empty', '', { mentions: [{ id: { open_id: 'ou_bot' } }] }));
+  await eventually(
+    () => replied.length >= 1,
+    'the empty p2p message produced no reply',
+  );
+
+  const card = replied.find((item) => item.type === 'interactive');
+  assert.ok(card, 'the menu card is sent as an interactive message');
+  assert.equal(
+    replied.some(({ text }) => text?.includes('目前支持文字、图片和文件消息')),
+    false,
+    'the text-only notice is not sent for a p2p message',
+  );
+});

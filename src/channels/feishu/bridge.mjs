@@ -1468,6 +1468,15 @@ export class FeishuHarnessBridge {
     // accept() 侧已用 nonEmptyString(content) 判定，两侧保持一致。
     const commandText = !hasImages && !hasFiles && text ? text.trim() : null;
     if (!text && !hasImages && !hasFiles && !hasReply) {
+      // A p2p message whose body is empty after the mention is stripped — an
+      // "@bot" with nothing else — carries no instruction to parse, and the
+      // menu card is what the reader is reaching for. Answer it the same way
+      // `/m` does instead of sending a "text only" notice, which reads as a
+      // refusal to someone who was only trying to open the panel.
+      if (event.message.chat_type === 'p2p') {
+        await this.#sendMenuCard(key, event.message.chat_id, { replyTo: event.message.message_id });
+        return;
+      }
       await this.#send(event.message.chat_id, t('目前支持文字、图片和文件消息。'), { replyTo: event.message.message_id });
       return;
     }
