@@ -307,6 +307,7 @@ const CHANNELS = [
   ['whatsapp', 'applyWhatsapp'],
   ['imessage', 'applyIMessage'],
   ['email', 'applyEmail'],
+  ['matrix', 'applyMatrix'],
   ['office', 'applyOffice'],
 ];
 

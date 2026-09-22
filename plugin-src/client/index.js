@@ -15,6 +15,7 @@ import {
   WhatsappLogoGlyph,
   IMessageLogoGlyph,
   EmailLogoGlyph,
+  MatrixLogoGlyph,
 } from './channel-logos.js';
 import { DINGTALK_RPC_CHANNEL } from './channels/dingtalk/api.js';
 import { DingtalkSettingsTab } from './channels/dingtalk/index.js';
@@ -54,6 +55,9 @@ import { IMessageSettingsTab } from './channels/imessage/index.js';
 import { EmailSettingsTab, useEmailChannelEnabled } from './channels/email/index.js';
 import { installIMessageStyles } from './channels/imessage/styles.js';
 import { installEmailStyles } from './channels/email/styles.js';
+import { MATRIX_RPC_CHANNEL } from './channels/matrix/api.js';
+import { MatrixSettingsTab } from './channels/matrix/index.js';
+import { installMatrixStyles } from './channels/matrix/styles.js';
 import { en, h, IM_LOCALE_NAMESPACE, setImTranslator, zh } from './i18n.js';
 import {
   HOST_LANGUAGE_RPC_CHANNEL,
@@ -107,6 +111,7 @@ const CHANNELS = Object.freeze([
   { id: 'wecomApp', label: '企业微信应用', note: '（实验功能）' },
   { id: 'imessage', label: 'iMessage', note: '（实验功能）' },
   { id: 'email', label: '邮箱', note: '（实验功能）' },
+  { id: 'matrix', label: 'Matrix' },
   { id: 'office', label: 'AI Office', note: '（实验功能）' },
 ]);
 
@@ -167,6 +172,11 @@ function EmailLogo() {
     h(EmailLogoGlyph));
 }
 
+function MatrixLogo() {
+  return h('span', { className: 'dim-logo dim-logoMatrix', 'aria-hidden': 'true' },
+    h(MatrixLogoGlyph));
+}
+
 function OfficeLogo() {
   return h('span', { className: 'dim-logo dim-logoOffice', 'aria-hidden': 'true' },
     h(OfficeLogoGlyph));
@@ -185,6 +195,7 @@ function ChannelLogo({ channel }) {
   if (channel === 'whatsapp') return h(WhatsappLogo);
   if (channel === 'imessage') return h(IMessageLogo);
   if (channel === 'email') return h(EmailLogo);
+  if (channel === 'matrix') return h(MatrixLogo);
   return h(OfficeLogo);
 }
 
@@ -210,6 +221,7 @@ export function IMSettingsTab({
   feishuRpcCall,
   imessageRpcCall,
   emailRpcCall,
+  matrixRpcCall,
   qqRpcCall,
   slackRpcCall,
   telegramRpcCall,
@@ -275,6 +287,7 @@ export function IMSettingsTab({
     globalSettingsRpcCall,
     imessageRpcCall,
     emailRpcCall,
+    matrixRpcCall,
   }, {
     location: browserLocation,
     onRecovery: reportLoopbackRecovery,
@@ -287,6 +300,7 @@ export function IMSettingsTab({
     globalSettingsRpcCall,
     imessageRpcCall,
     emailRpcCall,
+    matrixRpcCall,
     officeRpcCall,
     qqRpcCall,
     reportLoopbackRecovery,
@@ -427,6 +441,8 @@ export function IMSettingsTab({
                             ? h(IMessageSettingsTab, { rpcCall: rpcCalls.imessageRpcCall })
                           : active.id === 'email'
                             ? h(EmailSettingsTab, { rpcCall: rpcCalls.emailRpcCall })
+                          : active.id === 'matrix'
+                            ? h(MatrixSettingsTab, { rpcCall: rpcCalls.matrixRpcCall })
                           : h(OfficeSettingsTab, { rpcCall: rpcCalls.officeRpcCall }))),
     ),
   ));
@@ -466,6 +482,7 @@ export function apply(ctx) {
       installWhatsappStyles(),
       installIMessageStyles(),
       installEmailStyles(),
+      installMatrixStyles(),
       installOfficeStyles(),
       installImStyles(),
     ];
@@ -496,6 +513,8 @@ export function apply(ctx) {
     callManagementRpc(ctx.connection, IMESSAGE_RPC_CHANNEL, endpoint, payload, signal);
   const emailRpcCall = (endpoint, payload, signal) =>
     callManagementRpc(ctx.connection, EMAIL_RPC_CHANNEL, endpoint, payload, signal);
+  const matrixRpcCall = (endpoint, payload, signal) =>
+    callManagementRpc(ctx.connection, MATRIX_RPC_CHANNEL, endpoint, payload, signal);
   const slackRpcCall = (endpoint, payload, signal) =>
     callManagementRpc(ctx.connection, SLACK_RPC_CHANNEL, endpoint, payload, signal);
   const officeRpcCall = (endpoint, payload, signal) =>
@@ -526,6 +545,7 @@ export function apply(ctx) {
     imessageRpcCall,
     officeRpcCall,
     emailRpcCall,
+    matrixRpcCall,
     updateRpcCall,
     deliveryRpcCall,
     globalSettingsRpcCall,
