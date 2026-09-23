@@ -6,6 +6,11 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Fixed / 修复
+
+- 修复飞书状态文件一次写入失败后，后续消息持续失败的问题；本次写入仍正常报错，文件恢复可写后，后续消息无需重启机器人即可继续处理（[#250](https://github.com/xmanrui/dsh-im/issues/250)）。
+  Fixed a Feishu state-file write failure permanently blocking subsequent messages. The failed write still reports its error, while later messages recover once the file becomes writable, without restarting the bot ([#250](https://github.com/xmanrui/dsh-im/issues/250)).
+
 ## [4.26.0] - 2026-09-23
 
 ### Compatibility / 兼容性与升级提示
