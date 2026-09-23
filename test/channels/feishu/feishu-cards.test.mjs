@@ -349,3 +349,37 @@ test('countMarkdownTables reads GFM tables and ignores pipe-shaped prose', () =>
     'two tables separated by a blank line',
   );
 });
+
+test('a single block holding too many tables is split from the inside', () => {
+  // Splitting only between blocks left a short answer with six small tables on
+  // one card: it is a single block, so there was no boundary to cut at.
+  const table = (n) => `| T${n} |\n| --- |\n| v |`;
+  const one = { text: Array.from({ length: 6 }, (_, i) => table(i)).join('\n\n') };
+  assert.ok(countMarkdownTables(one.text) > STEP_STREAM_CARD_MAX_TABLES);
+
+  const chunks = splitStepStreamCardBlocks([one]);
+  assert.ok(chunks.length > 1, 'one over-full block must still become several cards');
+  for (const chunk of chunks) {
+    const tables = chunk.reduce((n, b) => n + countMarkdownTables(b.text), 0);
+    assert.ok(tables <= STEP_STREAM_CARD_MAX_TABLES, `a card carried ${tables} tables`);
+  }
+  // No table is severed or dropped.
+  const rebuilt = chunks.flat().map((b) => b.text).join('\n');
+  for (let i = 0; i < 6; i += 1) assert.match(rebuilt, new RegExp(`T${i}`));
+});
+
+test('a folded panel with too many tables is split too', () => {
+  // A panel's lines render into the same card, so its tables count as well.
+  const table = (n) => `| T${n} |\n| --- |\n| v |`;
+  const panel = { kind: 'notes', lines: Array.from({ length: 6 }, (_, i) => table(i)) };
+  const chunks = splitStepStreamCardBlocks([panel]);
+  assert.ok(chunks.length > 1, 'an over-full panel must be split');
+  const countIn = (chunk) => chunk.reduce((n, b) => n
+    + (typeof b.text === 'string' ? countMarkdownTables(b.text) : 0)
+    + (Array.isArray(b.lines) ? b.lines.reduce((m, l) => m + countMarkdownTables(l), 0) : 0), 0);
+  for (const chunk of chunks) {
+    assert.ok(countIn(chunk) <= STEP_STREAM_CARD_MAX_TABLES, 'no chunk exceeds the table limit');
+  }
+  const total = chunks.flat().reduce((n, b) => n + (b.lines?.length ?? 0), 0);
+  assert.equal(total, 6, 'every panel line survives the split');
+});

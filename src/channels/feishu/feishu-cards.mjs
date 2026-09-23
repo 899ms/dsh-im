@@ -1057,6 +1057,72 @@ function stepStreamCardTableCount(blocks) {
   return count;
 }
 
+/** Whether `line` begins a table, i.e. the next line is its delimiter row. */
+function beginsTableAt(lines, index) {
+  const line = lines[index];
+  if (typeof line !== 'string' || !line.trim().startsWith('|')) return false;
+  const next = lines[index + 1];
+  if (typeof next !== 'string' || !next.includes('|')) return false;
+  return countMarkdownTables(`${line}\n${next}`) > 0;
+}
+
+/**
+ * Break one block into pieces that each stay under the table limit.
+ *
+ * A single block can hold more tables than a card accepts — a short answer with
+ * six small tables is one block — so splitting only *between* blocks left it
+ * over the limit. A folded panel's `lines` count toward the same card, so they
+ * are bounded the same way.
+ *
+ * Prose is cut at table boundaries so no table is severed: once a piece already
+ * holds `maxTables` tables, the next table starts a new piece, taking the prose
+ * that introduced it along. A panel's lines are distributed one group at a
+ * time — each line holds at most one table — so `lines` become several panels.
+ */
+export function splitBlockByTableLimit(block, maxTables = STEP_STREAM_CARD_MAX_TABLES) {
+  if (!block || typeof block !== 'object' || maxTables < 1) return [block];
+  if (Array.isArray(block.lines)) {
+    if (block.lines.length <= maxTables) return [block];
+    // Only worth splitting when the panel alone exceeds the budget; otherwise a
+    // single line per panel would multiply cards for no reason.
+    const tableLines = block.lines.filter((line) => countMarkdownTables(line) > 0);
+    if (tableLines.length <= maxTables) return [block];
+    const groups = [];
+    let current = [];
+    let held = 0;
+    for (const line of block.lines) {
+      if (countMarkdownTables(line) > 0 && held >= maxTables && current.length > 0) {
+        groups.push(current);
+        current = [];
+        held = 0;
+      }
+      if (countMarkdownTables(line) > 0) held += 1;
+      current.push(line);
+    }
+    if (current.length > 0) groups.push(current);
+    return groups.length > 1 ? groups.map((lines) => ({ ...block, lines })) : [block];
+  }
+  if (typeof block.text !== 'string') return [block];
+  if (countMarkdownTables(block.text) <= maxTables) return [block];
+
+  const textLines = block.text.split('\n');
+  const pieces = [];
+  let current = [];
+  let held = 0;
+  for (let i = 0; i < textLines.length; i += 1) {
+    if (beginsTableAt(textLines, i) && held >= maxTables && current.length > 0) {
+      pieces.push(current.join('\n'));
+      current = [];
+      held = 0;
+    }
+    if (beginsTableAt(textLines, i)) held += 1;
+    current.push(textLines[i]);
+  }
+  if (current.length > 0) pieces.push(current.join('\n'));
+  if (pieces.length <= 1) return [block];
+  return pieces.map((text) => ({ ...block, text }));
+}
+
 /**
  * Split accumulated blocks into card-sized chunks at block boundaries,
  * budgeted by the encoded running-status card (the largest render) **and** by
@@ -1070,7 +1136,13 @@ export function splitStepStreamCardBlocks(
   limit = STEP_STREAM_CARD_MAX_BYTES,
   maxTables = STEP_STREAM_CARD_MAX_TABLES,
 ) {
-  const list = (Array.isArray(blocks) ? blocks : []).filter(Boolean);
+  // A single block can carry more tables than a card accepts — one short answer
+  // with six small tables — and splitting only between blocks cannot help. Each
+  // block is broken at table boundaries first, so the walk below sees pieces it
+  // can actually distribute.
+  const list = (Array.isArray(blocks) ? blocks : [])
+    .filter(Boolean)
+    .flatMap((block) => splitBlockByTableLimit(block, maxTables));
   if (list.length === 0) return [];
   const chunks = [];
   let current = [];
