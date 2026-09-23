@@ -320,10 +320,14 @@ function isFeishuLocalCommand(text, { hasImages = false, hasFiles = false } = {}
  * The caller also treats this as a command for access control, because opening
  * the menu is `/m` by another route and carries the same information.
  */
-function isBareMentionMenuRequest(event, text, { hasImages = false, hasFiles = false } = {}) {
+function isBareMentionMenuRequest(event, text, {
+  hasImages = false,
+  hasFiles = false,
+  hasReply = false,
+} = {}) {
   if (event?.message?.chat_type !== 'p2p') return false;
   if (event?.message?.message_type !== 'text') return false;
-  if (hasImages || hasFiles) return false;
+  if (hasImages || hasFiles || hasReply) return false;
   return !String(text ?? '').trim();
 }
 
@@ -1016,7 +1020,11 @@ export class FeishuHarnessBridge {
         // route, so it must clear the same command gate. Treating it as plain
         // chat let a sender without `canExecuteCommands` receive a menu that
         // carries workspace paths and other session titles.
-        || isBareMentionMenuRequest(event, commandText, { hasImages, hasFiles }),
+        || isBareMentionMenuRequest(event, commandText, {
+          hasImages,
+          hasFiles,
+          hasReply: hasReplyReference(commandMessage),
+        }),
     });
     if (!access.allowed) {
       this.#acceptedMessageIds.set(messageId, null);
@@ -1499,7 +1507,7 @@ export class FeishuHarnessBridge {
       // menu card is what the reader is reaching for — answer it the way `/m`
       // does rather than with a "text only" notice. Kept to plain p2p text so a
       // voice note, video or forwarded card still gets its own notice.
-      if (isBareMentionMenuRequest(event, text, { hasImages, hasFiles })) {
+      if (isBareMentionMenuRequest(event, text, { hasImages, hasFiles, hasReply })) {
         await this.#sendMenuCard(key, event.message.chat_id, { replyTo: event.message.message_id });
         return;
       }

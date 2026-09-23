@@ -11829,8 +11829,9 @@ test('a p2p message with no body opens the menu instead of a text-only notice', 
     allowedSenderOpenIds: new Set(['ou_user']),
   });
 
-  // p2p, empty body — what an "@bot" with no other text becomes.
-  await bridge.accept(event('om_empty', '', { mentions: [{ id: { open_id: 'ou_bot' } }] }));
+  await bridge.accept(event('om_empty', '@_user_1', {
+    mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+  }));
   await eventually(
     () => replied.length >= 1,
     'the empty p2p message produced no reply',
@@ -11884,7 +11885,9 @@ test('a bare mention opens the menu only when commands are allowed', async () =>
     }),
   });
 
-  await bridge.accept(event('om_bare', '', { mentions: [{ id: { open_id: 'ou_bot' } }] }));
+  await bridge.accept(event('om_bare', '@_user_1', {
+    mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+  }));
   await eventually(() => replied.length >= 1, 'the bare mention produced no reply');
 
   assert.equal(
@@ -11938,7 +11941,9 @@ test('/m and a bare mention are refused the same way', async () => {
   };
 
   const slashMenu = await run('/m');
-  const bareMention = await run('', { mentions: [{ id: { open_id: 'ou_bot' } }] });
+  const bareMention = await run('@_user_1', {
+    mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+  });
   assert.equal(slashMenu, false, '/m must be denied');
   assert.equal(bareMention, false, 'a bare mention must be denied too');
 });
@@ -11974,20 +11979,74 @@ test('a non-text message keeps its own notice instead of opening the menu', asyn
     allowedSenderOpenIds: new Set(['ou_user']),
   });
 
-  await bridge.accept(event('om_voice', '', {
-    message_type: 'audio',
-    mentions: [{ id: { open_id: 'ou_bot' } }],
-  }));
-  await eventually(() => replied.length >= 1, 'the audio message produced no reply');
-
-  assert.equal(
-    replied.some(({ type }) => type === 'interactive'),
-    false,
-    'an audio message must not open the menu',
-  );
-  assert.equal(
-    replied.some(({ text }) => text?.includes('目前支持文字、图片和文件消息')),
-    true,
-    'the unsupported-type notice is still sent',
-  );
+  for (const [messageType, content] of [
+    ['audio', { file_key: 'file_voice', duration: 1000 }],
+    ['media', { file_key: 'file_video', file_name: 'clip.mp4' }],
+    ['sticker', { file_key: 'file_sticker' }],
+    ['interactive', { elements: [[{ tag: 'img', image_key: 'img_only' }]] }],
+  ]) {
+    const previousReplies = replied.length;
+    await bridge.accept(event(`om_${messageType}`, '', {
+      message_type: messageType,
+      content: JSON.stringify(content),
+    }));
+    assert.equal(replied.length, previousReplies + 1, `${messageType} receives one reply`);
+    assert.equal(replied.at(-1).type, 'text', `${messageType} must not open the menu`);
+    assert.match(replied.at(-1).text, /目前支持文字、图片和文件消息/);
+  }
 });
+
+for (const referenceField of ['parent_id', 'root_id']) {
+  test(`a quoted bare mention remains ordinary chat without command permission (${referenceField})`, async () => {
+    const fixture = stateFixture([['p2p:ou_user', 'session-quoted-mention']]);
+    const lookups = [];
+    const asked = [];
+    const sent = [];
+    const send = async (request) => {
+      sent.push({ type: request.data.msg_type, body: JSON.parse(request.data.content) });
+      return { code: 0, data: { message_id: `om_reply_${sent.length}` } };
+    };
+    const bridge = new FeishuHarnessBridge({
+      client: { im: { v1: { message: {
+        create: send,
+        reply: send,
+        get: async (request) => {
+          lookups.push(request.path.message_id);
+          return { code: 0, data: { items: [{
+            message_id: 'om_quoted',
+            chat_id: 'oc_chat',
+            msg_type: 'text',
+            body: { content: JSON.stringify({ text: '引用的正文 PR254' }) },
+          }] } };
+        },
+      } } } },
+      channel: {},
+      harness: {
+        sessionExists: async () => true,
+        ask: async (sessionId, content) => {
+          asked.push({ sessionId, content });
+          return '引用内容已收到';
+        },
+        listWorkspaces: async () => assert.fail('ordinary chat must not read menu data'),
+      },
+      state: fixture.state,
+      status: bridgeStatus(),
+      accessPolicy: directAccessPolicy({
+        users: [{ id: 'ou_user', canExecuteCommands: false }],
+      }),
+    });
+
+    await bridge.accept(event(`om_mention_${referenceField}`, '@_user_1', {
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+      [referenceField]: 'om_quoted',
+    }));
+    await bridge.waitForIdle();
+
+    assert.deepEqual(lookups, ['om_quoted']);
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].sessionId, 'session-quoted-mention');
+    assert.match(JSON.stringify(asked[0].content), /引用的正文 PR254/);
+    assert.deepEqual(sent, [{ type: 'text', body: { text: '引用内容已收到' } }]);
+    assert.equal(fixture.sessions.get('p2p:ou_user'), 'session-quoted-mention');
+  });
+}
