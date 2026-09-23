@@ -39,7 +39,7 @@
 <a id="recognition"></a>
 
 > [!NOTE]
-> **DSH-IM 已获得 DeepSeek Harness 官方认可**，并获得价值 **人民币 1,000 元的 Token 额度奖励**。感谢官方对本项目的肯定与支持！
+> **DSH-IM 已获得 DeepSeek Harness 官方**价值 **人民币 1,000 元的 Token 赞助**。感谢官方对本项目的肯定与支持！
 
 ## 简介
 

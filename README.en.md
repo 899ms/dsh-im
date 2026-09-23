@@ -38,7 +38,7 @@
 <a id="recognition"></a>
 
 > [!NOTE]
-> **DSH-IM has received official recognition from DeepSeek Harness**, along with an award of **RMB 1,000 in token credits**. Thank you to the DeepSeek Harness team for recognizing and supporting this project!
+> **DSH-IM has received official sponsorship from DeepSeek Harness** in the form of **RMB 1,000 in token credits**. Thank you to the DeepSeek Harness team for supporting this project!
 
 ## Introduction
 
