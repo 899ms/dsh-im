@@ -305,6 +305,28 @@ function isFeishuLocalCommand(text, { hasImages = false, hasFiles = false } = {}
     || ARCHIVED_COMMAND.test(command);
 }
 
+/**
+ * A p2p text message that is nothing but a mention of the bot.
+ *
+ * The mention is stripped before we see the text, so `@bot` arrives as an empty
+ * body — indistinguishable from an empty message unless the message type is
+ * checked. Deliberately narrow:
+ *
+ *   - only `p2p`, where the reader is talking to the bot directly;
+ *   - only `text`, so a voice note, video, sticker or forwarded card keeps its
+ *     own "not supported" notice instead of silently opening a menu;
+ *   - only when nothing else came with it, so `@bot 你好` stays a prompt.
+ *
+ * The caller also treats this as a command for access control, because opening
+ * the menu is `/m` by another route and carries the same information.
+ */
+function isBareMentionMenuRequest(event, text, { hasImages = false, hasFiles = false } = {}) {
+  if (event?.message?.chat_type !== 'p2p') return false;
+  if (event?.message?.message_type !== 'text') return false;
+  if (hasImages || hasFiles) return false;
+  return !String(text ?? '').trim();
+}
+
 /** Canonical workspace/session help advertised by every bridge family. */
 const WORKSPACE_HELP_LINES = [
   '/workspace 工作区序号或绝对路径  切换工作区',
@@ -989,7 +1011,12 @@ export class FeishuHarnessBridge {
         hasImages,
         hasFiles,
       }) || isFeishuLocalCommand(commandText, { hasImages, hasFiles })
-        || (!hasImages && !hasFiles && NUMBER_REPLY.test(commandText) && this.#menus.has(key)),
+        || (!hasImages && !hasFiles && NUMBER_REPLY.test(commandText) && this.#menus.has(key))
+        // Opening the menu on a bare mention is the `/m` command by another
+        // route, so it must clear the same command gate. Treating it as plain
+        // chat let a sender without `canExecuteCommands` receive a menu that
+        // carries workspace paths and other session titles.
+        || isBareMentionMenuRequest(event, commandText, { hasImages, hasFiles }),
     });
     if (!access.allowed) {
       this.#acceptedMessageIds.set(messageId, null);
@@ -1468,12 +1495,11 @@ export class FeishuHarnessBridge {
     // accept() 侧已用 nonEmptyString(content) 判定，两侧保持一致。
     const commandText = !hasImages && !hasFiles && text ? text.trim() : null;
     if (!text && !hasImages && !hasFiles && !hasReply) {
-      // A p2p message whose body is empty after the mention is stripped — an
-      // "@bot" with nothing else — carries no instruction to parse, and the
-      // menu card is what the reader is reaching for. Answer it the same way
-      // `/m` does instead of sending a "text only" notice, which reads as a
-      // refusal to someone who was only trying to open the panel.
-      if (event.message.chat_type === 'p2p') {
+      // An "@bot" with nothing else carries no instruction to parse, and the
+      // menu card is what the reader is reaching for — answer it the way `/m`
+      // does rather than with a "text only" notice. Kept to plain p2p text so a
+      // voice note, video or forwarded card still gets its own notice.
+      if (isBareMentionMenuRequest(event, text, { hasImages, hasFiles })) {
         await this.#sendMenuCard(key, event.message.chat_id, { replyTo: event.message.message_id });
         return;
       }

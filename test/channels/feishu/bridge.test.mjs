@@ -11844,3 +11844,150 @@ test('a p2p message with no body opens the menu instead of a text-only notice', 
     'the text-only notice is not sent for a p2p message',
   );
 });
+
+test('a bare mention opens the menu only when commands are allowed', async () => {
+  // Opening the menu on `@bot` is `/m` by another route, so it has to clear the
+  // same command gate. Treating the empty body as ordinary chat let a sender
+  // without `canExecuteCommands` receive a menu carrying workspace paths and
+  // other session titles.
+  const replied = [];
+  const seen = new Set();
+  const bridge = new FeishuHarnessBridge({
+    client: {
+      im: { v1: { message: {
+        create: async () => ({ code: 0, data: { message_id: 'om_created' } }),
+        reply: async (request) => {
+          replied.push({
+            type: request.data.msg_type,
+            text: request.data.msg_type === 'text'
+              ? JSON.parse(request.data.content).text
+              : null,
+          });
+          return { code: 0, data: { message_id: `om_replied_${replied.length}` } };
+        },
+      } } },
+    },
+    harness: {
+      ensureRunning: async () => true,
+      bindWorkspaceSession: async (key, sessionId) => ({ sessionId, title: 'Test Session' }),
+    },
+    state: {
+      hasSeen: (id) => seen.has(id),
+      markSeen: async (id) => seen.add(id),
+      sessionFor: () => null,
+      setSession: async () => {},
+      clearSession: async () => {},
+    },
+    status: bridgeStatus(),
+    accessPolicy: directAccessPolicy({
+      users: [{ id: 'ou_user', canExecuteCommands: false }],
+    }),
+  });
+
+  await bridge.accept(event('om_bare', '', { mentions: [{ id: { open_id: 'ou_bot' } }] }));
+  await eventually(() => replied.length >= 1, 'the bare mention produced no reply');
+
+  assert.equal(
+    replied.some(({ type }) => type === 'interactive'),
+    false,
+    'the menu card must not be sent to a sender who cannot execute commands',
+  );
+  assert.equal(
+    replied.some(({ text }) => text?.includes('命令') || text?.includes('权限')),
+    true,
+    'the command-permission denial is reported instead',
+  );
+});
+
+test('/m and a bare mention are refused the same way', async () => {
+  // The two routes must agree, or the gate is only as strong as its weakest
+  // entry point.
+  const run = async (text, overrides = {}) => {
+    const replied = [];
+    const seen = new Set();
+    const bridge = new FeishuHarnessBridge({
+      client: {
+        im: { v1: { message: {
+          create: async () => ({ code: 0, data: { message_id: 'om_created' } }),
+          reply: async (request) => {
+            replied.push({
+              type: request.data.msg_type,
+              text: request.data.msg_type === 'text'
+                ? JSON.parse(request.data.content).text : null,
+            });
+            return { code: 0, data: { message_id: `om_${replied.length}` } };
+          },
+        } } },
+      },
+      harness: { ensureRunning: async () => true },
+      state: {
+        hasSeen: (id) => seen.has(id),
+        markSeen: async (id) => seen.add(id),
+        sessionFor: () => null,
+        setSession: async () => {},
+        clearSession: async () => {},
+      },
+      status: bridgeStatus(),
+      accessPolicy: directAccessPolicy({
+        users: [{ id: 'ou_user', canExecuteCommands: false }],
+      }),
+    });
+    await bridge.accept(event(`om_${text || 'bare'}`, text, overrides));
+    await eventually(() => replied.length >= 1, 'no reply for a denied command');
+    return replied.some(({ type }) => type === 'interactive');
+  };
+
+  const slashMenu = await run('/m');
+  const bareMention = await run('', { mentions: [{ id: { open_id: 'ou_bot' } }] });
+  assert.equal(slashMenu, false, '/m must be denied');
+  assert.equal(bareMention, false, 'a bare mention must be denied too');
+});
+
+test('a non-text message keeps its own notice instead of opening the menu', async () => {
+  // A voice note, video or sticker has no text to parse. Opening the menu for it
+  // would silently swallow the "not supported" notice the reader needs.
+  const replied = [];
+  const seen = new Set();
+  const bridge = new FeishuHarnessBridge({
+    client: {
+      im: { v1: { message: {
+        create: async () => ({ code: 0, data: { message_id: 'om_created' } }),
+        reply: async (request) => {
+          replied.push({
+            type: request.data.msg_type,
+            text: request.data.msg_type === 'text'
+              ? JSON.parse(request.data.content).text : null,
+          });
+          return { code: 0, data: { message_id: `om_${replied.length}` } };
+        },
+      } } },
+    },
+    harness: { ensureRunning: async () => true },
+    state: {
+      hasSeen: (id) => seen.has(id),
+      markSeen: async (id) => seen.add(id),
+      sessionFor: () => null,
+      setSession: async () => {},
+      clearSession: async () => {},
+    },
+    status: bridgeStatus(),
+    allowedSenderOpenIds: new Set(['ou_user']),
+  });
+
+  await bridge.accept(event('om_voice', '', {
+    message_type: 'audio',
+    mentions: [{ id: { open_id: 'ou_bot' } }],
+  }));
+  await eventually(() => replied.length >= 1, 'the audio message produced no reply');
+
+  assert.equal(
+    replied.some(({ type }) => type === 'interactive'),
+    false,
+    'an audio message must not open the menu',
+  );
+  assert.equal(
+    replied.some(({ text }) => text?.includes('目前支持文字、图片和文件消息')),
+    true,
+    'the unsupported-type notice is still sent',
+  );
+});
