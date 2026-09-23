@@ -8,6 +8,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ### Fixed / 修复
 
+- 飞书分步流式卡片按实际表格数量拆分正文与折叠面板，保留完整表格；重新分片时同步已有卡片，并隔离审批前后的卡片，避免超限、内容缺失或覆盖历史过程。感谢 [@C3H3-AI](https://github.com/C3H3-AI)（[#255](https://github.com/xmanrui/dsh-im/pull/255)）。
+  Feishu step-streaming cards split answers and folded panels by their actual table count while preserving complete tables. Existing chunks are synchronized after redistribution, and cards before an interaction remain isolated from later updates. Thanks to [@C3H3-AI](https://github.com/C3H3-AI) ([#255](https://github.com/xmanrui/dsh-im/pull/255)).
 - 飞书支持读取转发卡片中的可见文字，私聊仅提及机器人时可打开菜单，并沿用命令权限检查；语音、视频、表情和无可读文字的卡片保留不支持类型提示。感谢 [@C3H3-AI](https://github.com/C3H3-AI)（[#254](https://github.com/xmanrui/dsh-im/pull/254)）。
   Feishu now reads visible text from forwarded cards and opens the menu for a bare private mention with command permissions enforced. Unsupported audio, video, stickers, and unreadable cards retain their existing notice. Thanks to [@C3H3-AI](https://github.com/C3H3-AI) ([#254](https://github.com/xmanrui/dsh-im/pull/254)).
 - 修复私聊引用消息后仅提及机器人时，被误判为菜单命令的问题；允许聊天但禁止命令的用户仍可正常提交引用内容。

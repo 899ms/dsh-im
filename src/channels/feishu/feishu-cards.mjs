@@ -1020,107 +1020,151 @@ export function stepStatusText(status) {
  */
 export const STEP_STREAM_CARD_MAX_TABLES = 5;
 
-/**
- * Count the tables a markdown string renders as.
- *
- * Feishu turns a GFM table into a `table` element, so the count is of table
- * *blocks*: a header row followed by a delimiter row of dashes and pipes. A
- * line matching the delimiter is what distinguishes a table from ordinary
- * prose that merely contains pipes, and each delimiter starts a new one.
- */
+function hasClosingBacktickRun(text, start, length) {
+  for (let index = start; index < text.length;) {
+    if (text[index] !== '`') {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (text[end] === '`') end += 1;
+    if (end - index === length) return true;
+    index = end;
+  }
+  return false;
+}
+
+function gfmTableCells(line) {
+  const normalized = line.endsWith('\r') ? line.slice(0, -1) : line;
+  if (normalized.startsWith('    ') || normalized.startsWith('\t')) return null;
+  const text = normalized.trim();
+  if (!text) return null;
+
+  const cells = [];
+  let cell = '';
+  let separators = 0;
+  let codeRun = 0;
+  for (let index = 0; index < text.length;) {
+    const character = text[index];
+    if (character === '\\' && index + 1 < text.length) {
+      cell += text.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (character === '`') {
+      let end = index + 1;
+      while (text[end] === '`') end += 1;
+      const length = end - index;
+      if (codeRun === length) {
+        codeRun = 0;
+      } else if (codeRun === 0 && hasClosingBacktickRun(text, end, length)) {
+        codeRun = length;
+      }
+      cell += text.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (character === '|' && codeRun === 0) {
+      cells.push(cell);
+      cell = '';
+      separators += 1;
+      index += 1;
+      continue;
+    }
+    cell += character;
+    index += 1;
+  }
+  if (separators === 0) return null;
+  cells.push(cell);
+  if (cells[0].trim() === '') cells.shift();
+  if (cells.at(-1)?.trim() === '') cells.pop();
+  return cells.length > 0 ? cells : null;
+}
+
+/** Locate table headers once for both counting and splitting. */
+function markdownTableStarts(text) {
+  if (typeof text !== 'string' || !text) return [];
+  const lines = text.split('\n');
+  const offsets = [];
+  let offset = 0;
+  for (const line of lines) {
+    offsets.push(offset);
+    offset += line.length + 1;
+  }
+  const starts = [];
+  let fence = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].replace(/\r$/, '');
+    if (fence) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (opening && (opening[1][0] !== '`' || !opening[2].includes('`'))) {
+      fence = opening[1];
+      continue;
+    }
+    const header = gfmTableCells(line);
+    const delimiter = gfmTableCells(lines[index + 1] ?? '');
+    if (!header || !delimiter || header.length !== delimiter.length
+      || !delimiter.every((cell) => /^\s*:?-+:?\s*$/.test(cell))) continue;
+    starts.push(offsets[index]);
+    index += 1;
+    // A delimiter-looking data row is part of this table, not another header.
+    while (index + 1 < lines.length && gfmTableCells(lines[index + 1])) index += 1;
+  }
+  return starts;
+}
+
 export function countMarkdownTables(text) {
-  if (typeof text !== 'string' || !text) return 0;
-  let count = 0;
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed.includes('|')) continue;
-    // | --- | :---: | ---: | — every cell is dashes with optional colons.
-    // A single-column table (`| --- |`) is still a table.
-    if (/^\|?[\s:|-]*-[\s:|-]*\|?$/.test(trimmed) && /-/.test(trimmed)) {
-      const cells = trimmed.replace(/^\||\|$/g, '').split('|');
-      if (cells.length >= 1 && cells.every((cell) => /^\s*:?-+:?\s*$/.test(cell))) count += 1;
-    }
-  }
-  return count;
+  return markdownTableStarts(text).length;
 }
 
-/** The tables a set of blocks renders as, across prose and folded panels. */
+function splitMarkdownByTableLimit(text, maxTables) {
+  const starts = markdownTableStarts(text);
+  const parts = [];
+  let from = 0;
+  for (let index = maxTables; index < starts.length; index += maxTables) {
+    parts.push(text.slice(from, starts[index]));
+    from = starts[index];
+  }
+  parts.push(text.slice(from));
+  return parts;
+}
+
+/** Count the Markdown that stepStreamCard actually renders. */
 function stepStreamCardTableCount(blocks) {
-  let count = 0;
-  for (const block of Array.isArray(blocks) ? blocks : []) {
-    if (typeof block?.text === 'string') count += countMarkdownTables(block.text);
-    // Folded panels render their lines too, and Feishu counts those tables.
-    if (Array.isArray(block?.lines)) {
-      for (const line of block.lines) count += countMarkdownTables(line);
-    }
-  }
-  return count;
+  return blocks.reduce((sum, block) => {
+    const text = block?.kind === 'notes' || block?.kind === 'tools'
+      ? (block.lines ?? []).filter((line) => typeof line === 'string' && line.trim()).join('\n')
+      : block?.text;
+    return sum + countMarkdownTables(text);
+  }, 0);
 }
 
-/** Whether `line` begins a table, i.e. the next line is its delimiter row. */
-function beginsTableAt(lines, index) {
-  const line = lines[index];
-  if (typeof line !== 'string' || !line.trim().startsWith('|')) return false;
-  const next = lines[index + 1];
-  if (typeof next !== 'string' || !next.includes('|')) return false;
-  return countMarkdownTables(`${line}\n${next}`) > 0;
-}
-
-/**
- * Break one block into pieces that each stay under the table limit.
- *
- * A single block can hold more tables than a card accepts — a short answer with
- * six small tables is one block — so splitting only *between* blocks left it
- * over the limit. A folded panel's `lines` count toward the same card, so they
- * are bounded the same way.
- *
- * Prose is cut at table boundaries so no table is severed: once a piece already
- * holds `maxTables` tables, the next table starts a new piece, taking the prose
- * that introduced it along. A panel's lines are distributed one group at a
- * time — each line holds at most one table — so `lines` become several panels.
- */
+/** Split display copies; the bridge's logical blocks and answer indices stay intact. */
 export function splitBlockByTableLimit(block, maxTables = STEP_STREAM_CARD_MAX_TABLES) {
-  if (!block || typeof block !== 'object' || maxTables < 1) return [block];
-  if (Array.isArray(block.lines)) {
-    if (block.lines.length <= maxTables) return [block];
-    // Only worth splitting when the panel alone exceeds the budget; otherwise a
-    // single line per panel would multiply cards for no reason.
-    const tableLines = block.lines.filter((line) => countMarkdownTables(line) > 0);
-    if (tableLines.length <= maxTables) return [block];
+  if (!block || typeof block !== 'object' || !Number.isInteger(maxTables) || maxTables < 1) return [block];
+  if (block.kind === 'notes' || block.kind === 'tools') {
+    const lines = (block.lines ?? []).filter((line) => typeof line === 'string' && line.trim());
+    if (countMarkdownTables(lines.join('\n')) <= maxTables) return [block];
     const groups = [];
     let current = [];
-    let held = 0;
-    for (const line of block.lines) {
-      if (countMarkdownTables(line) > 0 && held >= maxTables && current.length > 0) {
-        groups.push(current);
-        current = [];
-        held = 0;
+    for (const line of lines) {
+      for (const part of splitMarkdownByTableLimit(line, maxTables)) {
+        if (current.length && countMarkdownTables([...current, part].join('\n')) > maxTables) {
+          groups.push(current);
+          current = [];
+        }
+        current.push(part);
       }
-      if (countMarkdownTables(line) > 0) held += 1;
-      current.push(line);
     }
-    if (current.length > 0) groups.push(current);
-    return groups.length > 1 ? groups.map((lines) => ({ ...block, lines })) : [block];
+    if (current.length) groups.push(current);
+    return groups.map((lines, index) => ({ ...block, lines, omitted: index === 0 ? block.omitted : 0 }));
   }
-  if (typeof block.text !== 'string') return [block];
-  if (countMarkdownTables(block.text) <= maxTables) return [block];
-
-  const textLines = block.text.split('\n');
-  const pieces = [];
-  let current = [];
-  let held = 0;
-  for (let i = 0; i < textLines.length; i += 1) {
-    if (beginsTableAt(textLines, i) && held >= maxTables && current.length > 0) {
-      pieces.push(current.join('\n'));
-      current = [];
-      held = 0;
-    }
-    if (beginsTableAt(textLines, i)) held += 1;
-    current.push(textLines[i]);
-  }
-  if (current.length > 0) pieces.push(current.join('\n'));
-  if (pieces.length <= 1) return [block];
-  return pieces.map((text) => ({ ...block, text }));
+  if (typeof block.text !== 'string' || countMarkdownTables(block.text) <= maxTables) return [block];
+  return splitMarkdownByTableLimit(block.text, maxTables).map((text) => ({ ...block, text }));
 }
 
 /**

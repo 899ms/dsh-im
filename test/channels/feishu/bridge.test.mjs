@@ -12050,3 +12050,145 @@ for (const referenceField of ['parent_id', 'root_id']) {
     assert.equal(fixture.sessions.get('p2p:ou_user'), 'session-quoted-mention');
   });
 }
+
+// PR #255: exercise real step-card input shapes and delivered message IDs.
+const reviewTable = n => `### T${n}\n\n| A | B |\n| --- | --- |\n| ${n} | ok |`;
+const reviewTables = (n, start=0) => Array.from({length:n}, (_,i)=>reviewTable(i+start)).join('\n\n');
+const tick = () => new Promise(resolve=>setImmediate(resolve));
+function renderedTableCount(card) {
+  if (!card || typeof card !== 'object') return 0;
+  let n = card.tag === 'markdown' ? (card.content.match(/^\| --- \| --- \|$/gm) ?? []).length : 0;
+  for (const value of Object.values(card)) {
+    if (Array.isArray(value)) n += value.reduce((sum, x)=>sum+renderedTableCount(x),0);
+    else if (value && typeof value === 'object') n += renderedTableCount(value);
+  }
+  return n;
+}
+for (const scenario of [
+  {
+    name: '3 folded + 3 answer with a tool between them',
+    run: async options => {
+      await options.onUpdate({type:'assistant-message',step:0,text:reviewTables(3)}); await tick();
+      await options.onUpdate({type:'tool',name:'bash',arguments:'{"command":"pwd"}'}); await tick();
+      await options.onUpdate({type:'assistant-message',step:1,text:reviewTables(3,3)}); await tick();
+      return reviewTables(3,3);
+    },
+  },
+  {
+    name: 'one short answer containing 6 tables',
+    run: async options => {
+      await options.onUpdate({type:'tool',name:'bash',arguments:'{"command":"pwd"}'}); await tick();
+      await options.onUpdate({type:'assistant-message',step:0,text:reviewTables(6)}); await tick();
+      return reviewTables(6);
+    },
+  },
+  {
+    name: 'three consecutive assistant steps containing 3 tables each',
+    run: async options => {
+      for (let step=0;step<3;step++) {
+        await options.onUpdate({type:'assistant-message',step,text:reviewTables(3,3*step)}); await tick();
+      }
+      return reviewTables(3,6);
+    },
+  },
+]) {
+  test(scenario.name, async t => {
+    const fx=stepCardClient();
+    const rejected=[];
+    const warnings=[];
+    for (const method of ['create','reply','patch']) {
+      const original=fx.client.im.v1.message[method];
+      fx.client.im.v1.message[method]=async request=>{
+        if (method==='patch' || request.data.msg_type==='interactive') {
+          const count=renderedTableCount(JSON.parse(request.data.content));
+          if (count>5) {
+            rejected.push({method,count});
+            return {code:230099,msg:'ErrCode: 11310; card table number over limit'};
+          }
+        }
+        return original(request);
+      };
+    }
+    const bridge=new FeishuHarnessBridge({
+      client:fx.client,channel:stepPushChannel(),harness:stepPushHarness(async(_id,_text,options)=>scenario.run(options)),
+      state:stateFixture().state,status:bridgeStatus(),allowedSenderOpenIds:new Set(['ou_user']),
+      stepPush:true,stepPushMode:'streaming_card',stepPushClock:stepPushClockFixture().stepPushClock,
+      logger:{warn:(...args)=>warnings.push(args.join(' ')),info:()=>{},debug:()=>{}},
+    });
+    await bridge.accept(event('om_review_255','检查多表格'));
+    await bridge.waitForIdle();
+    const finalCards=deliveredCardContents(fx.interactiveCreates,fx.patches,fx.ids);
+    const missingTables=scenario.name.startsWith('three consecutive') ? Array.from({length:9},(_,i)=>`### T${i}`).filter(marker=>!finalCards.join('\n').includes(marker)) : [];
+    t.diagnostic(JSON.stringify({missingTables, rejected,finalCardCount:finalCards.length,stuckRunning:finalCards.some(x=>x.includes('_运行中_')),fallbackPosts:fx.text.length,warnings}));
+    assert.deepEqual(rejected, [], 'Every card sent to Feishu must stay within the 5-table limit');
+    assert.deepEqual(missingTables, [], 'All folded process tables must remain visible in the delivered cards');
+  });
+}
+
+test('repatching cards after an approval must preserve pre-approval cards', async t => {
+  const fx=stepCardClient();
+  const bridge=new FeishuHarnessBridge({
+    client:fx.client,channel:stepPushChannel(),
+    harness:stepPushHarness(async(_id,_text,options)=>{
+      await options.onUpdate({type:'tool',name:'bash',arguments:'{"command":"BEFORE_ROTATION_MARKER"}'}); await tick();
+      await options.onInteraction({kind:'approval',payload:{}}); await tick();
+      await options.onUpdate({type:'assistant-message',step:0,text:reviewTables(6)}); await tick();
+      await options.onUpdate({type:'assistant-message',step:0,text:reviewTables(6)}); await tick();
+      return reviewTables(6);
+    }),
+    state:stateFixture().state,status:bridgeStatus(),allowedSenderOpenIds:new Set(['ou_user']),
+    stepPush:true,stepPushMode:'streaming_card',stepPushClock:stepPushClockFixture().stepPushClock,
+    logger:{warn:()=>{},info:()=>{},debug:()=>{}},
+  });
+  await bridge.accept(event('om_review_rotation','检查交互换卡'));
+  await bridge.waitForIdle();
+  const finalCards=deliveredCardContents(fx.interactiveCreates,fx.patches,fx.ids);
+  const before=JSON.stringify(fx.interactiveCreates[0]);
+  t.diagnostic(JSON.stringify({ids:fx.ids,beforeHadMarker:before.includes('BEFORE_ROTATION_MARKER'),afterHadMarker:finalCards[0].includes('BEFORE_ROTATION_MARKER'),patchTargets:fx.patches.map(p=>p.messageId)}));
+  assert.ok(before.includes('BEFORE_ROTATION_MARKER'));
+  assert.ok(finalCards[0].includes('BEFORE_ROTATION_MARKER'),'The original card must not be overwritten by a post-approval chunk');
+});
+
+for (const scenario of ['final rewrite', 'shrink and regrow', 'unchanged draft']) {
+  test(`step cards synchronize every existing chunk: ${scenario}`, async () => {
+    const fx = stepCardClient();
+    const initial = reviewTables(6);
+    const final = initial.replaceAll('T', 'FINAL_T');
+    const bridge = new FeishuHarnessBridge({
+      client: fx.client, channel: stepPushChannel(),
+      harness: stepPushHarness(async (_id, _text, options) => {
+        const draft = { type: 'assistant-message', step: 0, text: initial };
+        await options.onUpdate(draft);
+        await tick();
+        assert.equal(fx.ids.length, 2);
+        if (scenario === 'shrink and regrow') {
+          await options.onUpdate({ type: 'assistant-message', step: 0, text: 'SHORT_ANSWER' });
+          await tick();
+          const shrunk = deliveredCardContents(fx.interactiveCreates, fx.patches, fx.ids);
+          assert.doesNotMatch(shrunk.join('\n'), /### T/);
+          assert.match(shrunk.at(-1), /SHORT_ANSWER/);
+          await options.onUpdate({ type: 'assistant-message', step: 0, text: final });
+          await tick();
+          assert.equal(fx.ids.length, 2, 'existing cleared cards are reused');
+        } else if (scenario === 'unchanged draft') {
+          const previous = fx.patches.length;
+          await options.onUpdate(draft);
+          await tick();
+          assert.equal(fx.patches.length, previous, 'unchanged contents must not be patched');
+        }
+        // Supply changed delivery text after the draft render, exercising seal.
+        draft.text = final;
+        return final;
+      }),
+      state: stateFixture().state, status: bridgeStatus(), allowedSenderOpenIds: new Set(['ou_user']),
+      stepPush: true, stepPushMode: 'streaming_card', stepPushClock: stepPushClockFixture().stepPushClock,
+    });
+    await bridge.accept(event('om_sync_all_chunks', '检查所有分片'));
+    await bridge.waitForIdle();
+    const delivered = deliveredCardContents(fx.interactiveCreates, fx.patches, fx.ids);
+    assert.doesNotMatch(delivered.join('\n'), /### T|SHORT_ANSWER|_运行中_/);
+    for (let n = 0; n < 6; n++) assert.equal(delivered.join('\n').split(`### FINAL_T${n}`).length - 1, 1);
+    assert.match(delivered.at(-1), /_已完成_/);
+    assert.deepEqual(fx.text, []);
+  });
+}
