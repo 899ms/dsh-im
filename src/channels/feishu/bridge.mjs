@@ -4490,8 +4490,21 @@ export class FeishuHarnessBridge {
       }
       // Overflow: the accumulated blocks outgrew one card. Seal the current
       // message (no status line), spill extra chunks, and keep the last one
-      // live. Chunk boundaries are stable because blocks only append.
+      // live.
+      //
+      // Chunk boundaries are NOT stable: folding merges earlier steps into one
+      // process panel, which redistributes the tables the splitter budgets by.
+      // The count can therefore stay the same while the *content* of the
+      // earlier chunks changes — and only rewriting the count difference left
+      // the already-sealed cards showing stale content, so a step's tables
+      // disappeared from the final card. Every sealed chunk is therefore
+      // re-patched whenever the split is recomputed, not only when a new card
+      // appears.
       if (chunks.length > card.chunkCount) {
+        for (let index = 0; index < card.chunkCount - 1; index += 1) {
+          const id = card.cardIds[index];
+          if (id) await this.#patchStepCard(id, stepStreamCard(chunks[index], { status: 'sealed' }));
+        }
         await this.#patchStepCard(
           card.messageId,
           stepStreamCard(chunks[card.chunkCount - 1], { status: 'sealed' }),
@@ -4510,6 +4523,13 @@ export class FeishuHarnessBridge {
         }
         card.chunkCount = chunks.length;
       } else {
+        // The split can shrink or reshuffle without the count changing, so the
+        // sealed cards are rewritten to match the current distribution before
+        // the live one is updated.
+        for (let index = 0; index < chunks.length - 1; index += 1) {
+          const id = card.cardIds[index];
+          if (id) await this.#patchStepCard(id, stepStreamCard(chunks[index], { status: 'sealed' }));
+        }
         await this.#patchStepCard(card.messageId, stepStreamCard(live, { status: 'running' }));
       }
       await this.#persistMirrorState(card, live, 'running');

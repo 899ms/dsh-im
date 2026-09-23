@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   answeredQuestionCard,
+  countMarkdownTables,
+  splitStepStreamCardBlocks,
+  STEP_STREAM_CARD_MAX_TABLES,
   cardActionProbeCard,
   completionCard,
   customSteerCard,
@@ -287,4 +290,96 @@ test('issue #162: answeredQuestionCard 无任何按钮且标注已选项', () =>
   assert.ok(!json.includes('"tag":"button"'), '已答状态卡不得含可点按钮');
   assert.ok(json.includes('已回答') && json.includes('✅ 已选择：B'));
   assert.ok(json.includes('A') && json.includes('B'), '选项列表保留');
+});
+
+test('a card is split once it would carry more tables than Feishu accepts', () => {
+  // Feishu rejects the whole card write with `230099 / ErrCode 11310 card table
+  // number over limit` when one card holds too many tables, and the card then
+  // stays on its previous content — so the reply never appears. Splitting was
+  // budgeted by encoded bytes only, which a card full of short tables passes
+  // easily.
+  const table = (n) => ({ text: `| T${n} |\n| --- |\n| v |` });
+  const chunks = splitStepStreamCardBlocks(Array.from({ length: 6 }, (_, i) => table(i)));
+  assert.ok(chunks.length > 1, 'six tables must not stay on one card');
+  for (const chunk of chunks) {
+    const tables = chunk.reduce((sum, block) => sum + countMarkdownTables(block.text), 0);
+    assert.ok(
+      tables <= STEP_STREAM_CARD_MAX_TABLES,
+      `a card carried ${tables} tables, above the limit`,
+    );
+  }
+  // Nothing is dropped while splitting.
+  const total = chunks.flat().length;
+  assert.equal(total, 6, 'every block survives the split');
+});
+
+test('tables inside a folded process panel count toward the limit', () => {
+  // The maintainer's boundary test: 3 folded + 2 in the body succeeded, while
+  // 3 folded + 3 failed — the panel's tables are part of the same card.
+  const table = (n) => `| T${n} |\n| --- |\n| v |`;
+  const blocks = [
+    { kind: 'notes', lines: [table(1), table(2), table(3)] },
+    { text: table(4) },
+    { text: table(5) },
+    { text: table(6) },
+  ];
+  const chunks = splitStepStreamCardBlocks(blocks);
+  assert.ok(chunks.length > 1, 'folded tables must count, so this cannot fit on one card');
+  const countIn = (chunk) => chunk.reduce((sum, block) => (
+    sum
+    + (typeof block.text === 'string' ? countMarkdownTables(block.text) : 0)
+    + (Array.isArray(block.lines)
+      ? block.lines.reduce((n, line) => n + countMarkdownTables(line), 0) : 0)
+  ), 0);
+  for (const chunk of chunks) {
+    assert.ok(countIn(chunk) <= STEP_STREAM_CARD_MAX_TABLES, 'no chunk exceeds the table limit');
+  }
+});
+
+test('countMarkdownTables reads GFM tables and ignores pipe-shaped prose', () => {
+  assert.equal(countMarkdownTables(''), 0);
+  assert.equal(countMarkdownTables('普通文本，没有表格'), 0);
+  assert.equal(countMarkdownTables('a | b 只是文字\n下一行'), 0);
+  assert.equal(countMarkdownTables('| A | B |\n| --- | --- |\n| 1 | 2 |'), 1);
+  assert.equal(countMarkdownTables('| A |\n| --- |\n| 1 |'), 1, 'a single-column table still counts');
+  assert.equal(countMarkdownTables('| A | B |\n|:---|---:|\n| 1 | 2 |'), 1, 'alignment markers are fine');
+  assert.equal(
+    countMarkdownTables('| A |\n| --- |\n| 1 |\n\n| B |\n| --- |\n| 2 |'),
+    2,
+    'two tables separated by a blank line',
+  );
+});
+
+test('a single block holding too many tables is split from the inside', () => {
+  // Splitting only between blocks left a short answer with six small tables on
+  // one card: it is a single block, so there was no boundary to cut at.
+  const table = (n) => `| T${n} |\n| --- |\n| v |`;
+  const one = { text: Array.from({ length: 6 }, (_, i) => table(i)).join('\n\n') };
+  assert.ok(countMarkdownTables(one.text) > STEP_STREAM_CARD_MAX_TABLES);
+
+  const chunks = splitStepStreamCardBlocks([one]);
+  assert.ok(chunks.length > 1, 'one over-full block must still become several cards');
+  for (const chunk of chunks) {
+    const tables = chunk.reduce((n, b) => n + countMarkdownTables(b.text), 0);
+    assert.ok(tables <= STEP_STREAM_CARD_MAX_TABLES, `a card carried ${tables} tables`);
+  }
+  // No table is severed or dropped.
+  const rebuilt = chunks.flat().map((b) => b.text).join('\n');
+  for (let i = 0; i < 6; i += 1) assert.match(rebuilt, new RegExp(`T${i}`));
+});
+
+test('a folded panel with too many tables is split too', () => {
+  // A panel's lines render into the same card, so its tables count as well.
+  const table = (n) => `| T${n} |\n| --- |\n| v |`;
+  const panel = { kind: 'notes', lines: Array.from({ length: 6 }, (_, i) => table(i)) };
+  const chunks = splitStepStreamCardBlocks([panel]);
+  assert.ok(chunks.length > 1, 'an over-full panel must be split');
+  const countIn = (chunk) => chunk.reduce((n, b) => n
+    + (typeof b.text === 'string' ? countMarkdownTables(b.text) : 0)
+    + (Array.isArray(b.lines) ? b.lines.reduce((m, l) => m + countMarkdownTables(l), 0) : 0), 0);
+  for (const chunk of chunks) {
+    assert.ok(countIn(chunk) <= STEP_STREAM_CARD_MAX_TABLES, 'no chunk exceeds the table limit');
+  }
+  const total = chunks.flat().reduce((n, b) => n + (b.lines?.length ?? 0), 0);
+  assert.equal(total, 6, 'every panel line survives the split');
 });
