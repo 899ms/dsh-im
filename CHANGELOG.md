@@ -6,6 +6,32 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+## [4.26.0] - 2026-09-23
+
+### Compatibility / 兼容性与升级提示
+
+- 本版仅面向 **DSH 0.1.7-alpha.1** 的 Session V4 契约，并更新插件兼容性声明。请先升级 DSH，再升级 dsh-im，随后重启 Host 并刷新设置页；使用旧版 DSH 的用户请保留 dsh-im 4.25.0。本版不新增旧宿主兼容分支，也不承诺未经验证的后续版本。
+  This release targets the Session V4 contract in **DSH 0.1.7-alpha.1** and updates the compatibility manifest. Upgrade DSH first, then dsh-im, restart the Host, and refresh settings. Users on older DSH versions should stay on dsh-im 4.25.0. No new legacy-Host compatibility branches or unverified future-version guarantees are added.
+
+### Added / 新增
+
+- 主动投递服务、`message.send` RPC 及 HTTP 接口新增可选 `format: "markdown"`。飞书私聊和群聊可发送 Markdown 卡片，保留原始文本与换行；默认仍为纯文本，其他渠道沿用原有行为，不保证 Markdown 渲染。感谢 [@alpacachen](https://github.com/alpacachen)（[#246](https://github.com/xmanrui/dsh-im/pull/246)）。
+  Added optional `format: "markdown"` to proactive delivery, the `message.send` RPC, and HTTP endpoint. Feishu DMs and groups can receive Markdown cards with original text and line breaks preserved. Plain text remains the default; other channels retain their existing behavior without a Markdown-rendering guarantee. Thanks to [@alpacachen](https://github.com/alpacachen) ([#246](https://github.com/xmanrui/dsh-im/pull/246)).
+- 新增基于真实 DSH JSONL 持久化的上下文验证脚本，覆盖普通消息、来源、指导语、引用和结构化内容，以及关闭重开后的后续回合；脚本随 npm 包发布。
+  Added a real-DSH JSONL persistence verification script covering plain, source, guidance, quoted, and structured messages, including reopening and subsequent turns. The script is included in the npm package.
+
+### Fixed / 修复
+
+- 注入的来源信息、会话指导语及引用上下文改用 `source.kind: "plugin:dsh-im"`，适配 DSH 0.1.7-alpha.1 对消息来源的要求，修复 `SessionFormatError: format v4 message requires a producer-owned source kind`。保留用户正文、消息顺序及指导语去重行为；历史 Session 迁移仍由宿主负责。
+  Injected source, guidance, and quoted context now use `source.kind: "plugin:dsh-im"`, fixing `SessionFormatError: format v4 message requires a producer-owned source kind` on DSH 0.1.7-alpha.1. User content, message ordering, and guidance deduplication are preserved; historical Session migration remains the Host's responsibility.
+
+### Changed / 变更
+
+- 优化图片输入设置的字段对齐、保存与重试区域，将说明收纳至带无障碍描述的帮助提示；原有限制值和默认行为不变。
+  Aligned image-input settings and save/retry controls, moving explanatory text into an accessible help tooltip without changing limits or defaults.
+- 完善中英文主动投递文档与回归测试：Markdown 卡片不静默截断或自动拆分；发送失败或结果不确定时不自动改发纯文本，避免重复投递。
+  Expanded bilingual proactive-delivery documentation and regression coverage. Markdown cards are not silently truncated or automatically split, and failures or uncertain outcomes do not trigger automatic plain-text retries that could duplicate delivery.
+
 ## [4.25.0] - 2026-09-22
 
 ### Added / 新增
@@ -1211,7 +1237,8 @@ This file records the notable changes in each dsh-im release. Its format follows
 - 改进 npm 发布包结构，保留 CLI 入口并避免安装脚本拦截。
   Improved npm package contents to preserve the CLI entry point and avoid install-script blocking.
 
-[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.25.0...HEAD
+[Unreleased]: https://github.com/xmanrui/dsh-im/compare/v4.26.0...HEAD
+[4.26.0]: https://github.com/xmanrui/dsh-im/compare/v4.25.0...v4.26.0
 [4.25.0]: https://github.com/xmanrui/dsh-im/compare/v4.24.1...v4.25.0
 [4.24.1]: https://github.com/xmanrui/dsh-im/compare/v4.24.0...v4.24.1
 [4.24.0]: https://github.com/xmanrui/dsh-im/compare/v4.23.0...v4.24.0
