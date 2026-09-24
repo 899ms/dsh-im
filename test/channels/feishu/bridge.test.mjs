@@ -9040,6 +9040,78 @@ test('step push live_cot mode uses Feishu native process and sends the final ans
   assert.ok(!sent.at(-1).includes('PROCESS_MARKER_9f3a'));
 });
 
+test('step push live_cot mode keeps a topic turn inside the topic with the process card', async () => {
+  const fixture = stateFixture();
+  const cotCreates = [];
+  const replies = [];
+  const creates = [];
+  const patches = [];
+  const progressModes = [];
+  const { stepPushClock } = stepPushClockFixture();
+  const channel = {
+    ...stepPushChannel(),
+    createCot: async (chatId, options) => {
+      cotCreates.push({ chatId, options });
+      return { cotId: 'cot-topic', messageId: 'om-cot-topic' };
+    },
+    writeCotEvents: async () => {},
+  };
+  const bridge = new FeishuHarnessBridge({
+    client: { im: { v1: { message: {
+      reply: async (request) => {
+        replies.push({
+          msgType: request.data.msg_type,
+          replyInThread: request.data.reply_in_thread === true,
+          messageId: request.path.message_id,
+        });
+        return { code: 0, data: { message_id: `om_topic_r_${replies.length}` } };
+      },
+      create: async (request) => {
+        creates.push(request.data.msg_type);
+        return { code: 0, data: { message_id: `om_topic_c_${creates.length}` } };
+      },
+      patch: async (request) => {
+        patches.push(JSON.parse(request.data.content));
+        return { code: 0, data: {} };
+      },
+    } } } },
+    channel,
+    harness: stepPushHarness(async (_sessionId, _text, options) => {
+      progressModes.push(options.progressMode);
+      await options.onUpdate({ type: 'tool', name: 'bash', arguments: '{"command":"ls"}' });
+      return '话题内的最终答案';
+    }),
+    state: fixture.state,
+    status: bridgeStatus(),
+    allowedSenderOpenIds: new Set(['ou_user']),
+    groupTopicReply: true,
+    stepPush: true,
+    stepPushMode: 'live_cot',
+    stepPushClock,
+  });
+
+  await bridge.accept(event('om_live_topic', '处理话题任务', {
+    chat_type: 'group',
+    thread_id: 'omt_topic',
+    mentions: [{ id: { open_id: 'ou_bot' }, key: '@_user_1' }],
+  }));
+  await bridge.waitForIdle();
+
+  assert.deepEqual(cotCreates, [], 'the native process cannot target a topic, so it is not opened');
+  assert.deepEqual(progressModes, ['all']);
+  assert.ok(replies.length >= 1, 'the process card is delivered as a reply');
+  for (const reply of replies) {
+    assert.equal(reply.msgType, 'interactive', 'the topic turn uses the process card');
+    assert.equal(reply.replyInThread, true, 'the process card stays inside the topic');
+    assert.equal(reply.messageId, 'om_live_topic');
+  }
+  assert.deepEqual(creates, [], 'nothing is posted to the main group feed');
+  assert.ok(
+    JSON.stringify(patches.at(-1) ?? {}).includes('话题内的最终答案'),
+    'the final answer is sealed inside the topic card',
+  );
+});
+
 test('step push: tools and assistant notes push as discrete messages, final answer only in card', async () => {
   const fixture = stateFixture();
   const sent = [];
