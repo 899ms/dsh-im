@@ -4980,8 +4980,14 @@ export class FeishuHarnessBridge {
     });
     // 流式卡片模式：每轮一张过程卡（原地 patch），过程与最终答案都进卡；
     // post 模式维持逐条直推。先预建卡片状态，纯问答回合也能在收尾时开卡。
-    const streamingCard = this.#stepPushMode === FEISHU_STEP_PUSH_MODES.STREAMING_CARD;
+    // 飞书原生思考过程按 chat_id 创建，不会落进话题（#244）；话题内的回合改用
+    // 实时过程卡（以 reply_in_thread 回复留在话题内），避免过程出现在话题外。
+    const liveCotInTopic = this.#stepPushMode === FEISHU_STEP_PUSH_MODES.LIVE_COT
+      && this.#replyInThreadFor(messageId);
+    const streamingCard = this.#stepPushMode === FEISHU_STEP_PUSH_MODES.STREAMING_CARD
+      || liveCotInTopic;
     const liveCot = this.#stepPushMode === FEISHU_STEP_PUSH_MODES.LIVE_COT
+      && !liveCotInTopic
       && typeof this.#channel?.createCot === 'function'
       && typeof this.#channel?.writeCotEvents === 'function';
     const cot = liveCot
